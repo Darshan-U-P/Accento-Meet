@@ -3,9 +3,9 @@ import json
 import uuid
 from typing import Dict, Any
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 app = FastAPI()
 
@@ -62,6 +62,34 @@ async def send_pending_to_hosts(room_id: str):
                 pass
 
 
+@app.get("/debug/room/{room_id}")
+async def debug_room(room_id: str, request: Request):
+    """
+    Development-only debug endpoint returning room state.
+    Useful to inspect server view while testing across devices.
+    """
+    # Simple ACL: only allow localhost requests by default (safety)
+    client_host = request.client.host if request.client else None
+    if client_host not in ("127.0.0.1", "localhost", "::1"):
+        # Still allow but mark as remote request (you can tighten this if desired)
+        pass
+
+    if room_id not in rooms:
+        return JSONResponse({"room": room_id, "exists": False})
+    participants = []
+    pending = []
+    meta = rooms[room_id].get("_meta", {})
+    for cid, rec in rooms[room_id].items():
+        if cid == "_meta":
+            continue
+        info = {"id": cid, "name": rec.get("name", ""), "is_host": bool(rec.get("is_host", False)), "is_approved": bool(rec.get("is_approved", False))}
+        if rec.get("is_approved"):
+            participants.append(info)
+        else:
+            pending.append(info)
+    return JSONResponse({"room": room_id, "exists": True, "participants": participants, "pending": pending, "meta": meta})
+
+
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     await websocket.accept()
@@ -74,6 +102,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     client_id = uuid.uuid4().hex[:8]
     # placeholder record
     rooms[room_id][client_id] = {"ws": websocket, "name": "", "is_host": False, "is_approved": True}
+
+    print(f"[CONNECT] room={room_id} assigned_id={client_id}")
 
     try:
         # Expect initial 'join' msg
@@ -103,12 +133,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         if not existing_hosts:
             rooms[room_id][client_id]["is_host"] = True
             rooms[room_id][client_id]["is_approved"] = True
+            print(f"[HOST] room={room_id} id={client_id} became_host")
         else:
             # if room requires approval, mark pending
             if require_approval:
                 rooms[room_id][client_id]["is_approved"] = False
+                print(f"[PENDING] room={room_id} id={client_id} waiting_for_host")
             else:
                 rooms[room_id][client_id]["is_approved"] = True
+                print(f"[APPROVED] room={room_id} id={client_id} auto_approved")
 
         # If the new participant is pending: tell them and inform hosts (and send full pending list to hosts)
         if not rooms[room_id][client_id]["is_approved"]:
@@ -141,6 +174,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             if rooms[room_id][client_id].get("is_host"):
                 welcome_payload["pending"] = _pending_list(room_id)
             await safe_send(websocket, welcome_payload)
+            print(f"[WELCOME] room={room_id} to={client_id} participants_count={len(welcome_payload['participants'])}")
 
             # notify other approved participants about join
             join_notice = {"type": "participant-joined", "id": client_id, "name": display_name}
@@ -167,6 +201,21 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
             message.setdefault("from", client_id)
             mtype = message.get("type")
+            # LOG minimal
+            # print(f"[WS RX] room={room_id} from={client_id} type={mtype} to={message.get('to')}")
+
+            # Signaling passthrough (offer/answer/ice) - forward if target exists
+            if mtype in ("offer", "answer", "ice-candidate"):
+                target = message.get("to")
+                if target and target in rooms[room_id]:
+                    # only forward if target is approved (we keep this policy)
+                    if rooms[room_id][target].get("is_approved", False):
+                        await safe_send(rooms[room_id][target]["ws"], message)
+                    else:
+                        await safe_send(websocket, {"type": "error", "message": f"target {target} not approved yet"})
+                else:
+                    await safe_send(websocket, {"type": "error", "message": f"target {target} not in room"})
+                continue
 
             # Chat: only approved participants receive chats
             if mtype == "chat":
@@ -177,22 +226,28 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         await safe_send(rec["ws"], payload)
                 continue
 
-            # Host actions: accept/reject/set-approval
+            # Host actions: accept/reject/set-approval/refresh-pending
             if mtype == "action":
                 action = message.get("action")
                 target = message.get("target")
                 actor = client_id
                 actor_rec = rooms[room_id].get(actor)
-                if action in ("accept", "reject", "set-approval"):
+                if action in ("accept", "reject", "set-approval", "refresh-pending"):
                     # only host can do these
                     if not actor_rec or not actor_rec.get("is_host", False):
                         await safe_send(websocket, {"type": "error", "message": "Only host may perform this action"})
                         continue
 
+                # refresh pending (host requests current pending list resend)
+                if action == "refresh-pending":
+                    await send_pending_to_hosts(room_id)
+                    continue
+
                 # accept pending participant
                 if action == "accept" and target:
                     if target in rooms[room_id] and not rooms[room_id][target].get("is_approved", False):
                         rooms[room_id][target]["is_approved"] = True
+                        print(f"[ACCEPT] room={room_id} host={actor} accepted={target}")
                         # send welcome to the newly approved participant
                         await safe_send(
                             rooms[room_id][target]["ws"],
@@ -243,6 +298,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             pass
                     # send pending list to hosts (host UI may need to update)
                     await send_pending_to_hosts(room_id)
+                    print(f"[META] room={room_id} require_approval set to {val} by {actor}")
                     continue
 
             # rename (allowed for pending/approved)
@@ -262,6 +318,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             continue
 
     except WebSocketDisconnect:
+        print(f"[DISCONNECT] room={room_id} id={client_id}")
         # cleanup
         if room_id in rooms and client_id in rooms[room_id]:
             left_name = rooms[room_id][client_id].get("name", client_id)
@@ -278,6 +335,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         break
                 if new_host:
                     rooms[room_id][new_host]["is_host"] = True
+                    print(f"[PROMOTE] room={room_id} new_host={new_host}")
                     # notify all approved participants about host change via participants update
                     participants_update = {"type": "participants", "participants": _participants_list(room_id)}
                     for cid, rec in list(rooms[room_id].items()):
