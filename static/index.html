@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Chat — Simple Approval Demo</title>
+  <title>Chat — Simple Approval (with TURN dev ICE)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     /* Simple, minimal UI */
@@ -22,6 +22,8 @@
     .participants, .pending{margin-top:8px}
     .small{font-size:13px;color:var(--muted)}
     .hidden{display:none}
+    /* debug area */
+    #debug { margin-top:10px; font-size:12px; color: #9aa4b2; max-height:140px; overflow:auto; background:#051019; padding:8px; border-radius:6px }
   </style>
 </head>
 <body>
@@ -48,6 +50,10 @@
           <input id="message" placeholder="Type message..." style="flex:1" />
           <button id="send" disabled>Send</button>
         </div>
+
+        <div id="debug" class="small">
+          Debug log (ICE & signaling). Use when testing STUN/TURN connectivity.
+        </div>
       </div>
 
       <aside style="width:260px">
@@ -69,7 +75,81 @@
   </div>
 
 <script>
-// Minimal client with approval support
+// ------------------------
+// ICE servers (free public relays for dev/testing)
+// ------------------------
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+
+  // Metered openrelay (development/testing)
+  {
+    urls: [
+      "turn:openrelay.metered.ca:80",
+      "turn:openrelay.metered.ca:443?transport=tcp"
+    ],
+    username: "openrelayproject",
+    credential: "openrelayproject"
+  },
+
+  // Backup Metered global relay (development/testing)
+  {
+    urls: [
+      "turn:global.relay.metered.ca:80",
+      "turn:global.relay.metered.ca:443?transport=tcp"
+    ],
+    username: "openrelayproject",
+    credential: "openrelayproject"
+  }
+];
+
+// Helper to log debug/UI messages
+function debugLog(msg){
+  const el = document.getElementById('debug');
+  const d = document.createElement('div'); d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ------------------------
+// Simple PeerConnection helper (example)
+// call createPeerConnection(peerId) to create and inspect PC
+// ------------------------
+function createPeerConnection(peerId){
+  debugLog(`Creating RTCPeerConnection for peer ${peerId}`);
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+  pc.onicecandidate = (ev) => {
+    if (ev.candidate) {
+      debugLog(`ICE candidate (local) for ${peerId}: ${JSON.stringify(ev.candidate).slice(0,120)}...`);
+      // send candidate over signaling: ws.send(JSON.stringify({ type:'ice-candidate', to: peerId, candidate: ev.candidate }))
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    debugLog(`ICE state for ${peerId}: ${pc.iceConnectionState}`);
+  };
+
+  pc.onconnectionstatechange = () => {
+    debugLog(`PC connectionState for ${peerId}: ${pc.connectionState}`);
+  };
+
+  pc.ontrack = (ev) => {
+    debugLog(`ontrack from ${peerId} — streams: ${ev.streams.length}`);
+    // attach ev.streams[0] to a video element to show remote media
+  };
+
+  // Example: add local tracks if you have local stream (set localStream variable elsewhere)
+  if (window.localStream) {
+    window.localStream.getTracks().forEach(track => pc.addTrack(track, window.localStream));
+    debugLog('Added localStream tracks to PC');
+  }
+
+  return pc;
+}
+
+// ------------------------
+// Existing chat + approval client (kept minimal)
+// ------------------------
 let ws=null, myId=null, hostId=null;
 const nameEl=document.getElementById('name');
 const roomEl=document.getElementById('room');
@@ -87,38 +167,34 @@ const leavePending=document.getElementById('leavePending');
 function esc(s){return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c));}
 function addChat(html){const d=document.createElement('div');d.className='msg';d.innerHTML=html;chatEl.appendChild(d);chatEl.scrollTop=chatEl.scrollHeight}
 function renderParticipants(list){participantsEl.innerHTML='';(list||[]).forEach(p=>{const n=document.createElement('div');n.textContent=`${p.name} (${p.id})`;participantsEl.appendChild(n)})}
-function renderPending(list){pendingEl.innerHTML='';(list||[]).forEach(p=>{const row=document.createElement('div');row.style.display='flex';row.style.justifyContent='space-between';row.style.marginBottom='6px';row.innerHTML=`<div>${esc(p.name)}<div class=\'meta\'>${p.id}</div></div>`;const btns=document.createElement('div');const a=document.createElement('button');a.textContent='Accept';a.onclick=()=>{sendAction('accept',p.id);row.remove()};const r=document.createElement('button');r.textContent='Reject';r.onclick=()=>{if(confirm('Reject '+p.name+'?')){sendAction('reject',p.id);row.remove()}};btns.appendChild(a);btns.appendChild(r);row.appendChild(btns);pendingEl.appendChild(row)})}
+function renderPending(list){pendingEl.innerHTML='';(list||[]).forEach(p=>{const row=document.createElement('div');row.style.display='flex';row.style.justifyContent='space-between';row.style.marginBottom='6px';row.innerHTML=`<div>${esc(p.name)}<div class='meta'>${p.id}</div></div>`;const btns=document.createElement('div');const a=document.createElement('button');a.textContent='Accept';a.onclick=()=>{sendAction('accept',p.id);row.remove()};const r=document.createElement('button');r.textContent='Reject';r.onclick=()=>{if(confirm('Reject '+p.name+'?')){sendAction('reject',p.id);row.remove()}};btns.appendChild(a);btns.appendChild(r);row.appendChild(btns);pendingEl.appendChild(row)})}
 
 function sendAction(action,target,extra={}){if(!ws)return;ws.send(JSON.stringify(Object.assign({type:'action',action,target},extra)))}
 
 connectBtn.onclick=()=>{if(ws) return;const name=nameEl.value||'Guest';const room=roomEl.value||'main';const proto=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(room)}`);
-ws.onopen=()=>{ws.send(JSON.stringify({type:'join',name}));connectBtn.disabled=true;disconnectBtn.disabled=false;addChat('<div class="meta">Connecting…</div>')}
-ws.onmessage=e=>{try{const m=JSON.parse(e.data);handle(m)}catch(err){console.error(err)}}
-ws.onclose=()=>{addChat('<div class="meta">Disconnected</div>');cleanup()} 
+ws.onopen=()=>{ws.send(JSON.stringify({type:'join',name}));connectBtn.disabled=true;disconnectBtn.disabled=false;addChat('<div class=\"meta\">Connecting…</div>'); debugLog('WS open');}
+ws.onmessage=e=>{try{const m=JSON.parse(e.data); debugLog('WS message: '+JSON.stringify(m).slice(0,200)); handle(m)}catch(err){console.error(err)}}
+ws.onclose=()=>{addChat('<div class=\"meta\">Disconnected</div>'); debugLog('WS closed'); cleanup()}
 }
-
 disconnectBtn.onclick=()=>{if(ws) ws.close();cleanup()}
-
-sendBtn.onclick=()=>{const t=msgEl.value.trim(); if(!t||!ws) return; ws.send(JSON.stringify({type:'chat',text:t})); addChat(`<strong>[me]</strong> ${esc(t)}`); msgEl.value=''}
-approvalToggle.onchange=()=>{ if(!ws){approvalToggle.checked=!approvalToggle.checked;alert('Connect as host to change');return} sendAction('set-approval',null,{value:approvalToggle.checked}) }
-leavePending.onclick=()=>{ if(ws) ws.close(); cleanup() }
+sendBtn.onclick=()=>{const t=msgEl.value.trim(); if(!t||!ws) return; ws.send(JSON.stringify({type:'chat',text:t})); addChat(`<strong>[me]</strong> ${esc(t)}`); msgEl.value=''}approvalToggle.onchange=()=>{ if(!ws){approvalToggle.checked=!approvalToggle.checked;alert('Connect as host to change');return} sendAction('set-approval',null,{value:approvalToggle.checked}) }leavePending.onclick=()=>{ if(ws) ws.close(); cleanup() }
 
 function handle(msg){switch(msg.type){
-  case 'waiting': waitingBox.classList.remove('hidden'); addChat('<div class="meta">You are waiting for approval</div>'); sendBtn.disabled=true; break;
-  case 'welcome': waitingBox.classList.add('hidden'); myId=msg.id; hostId=msg.host_id; addChat(`<div class="meta">Welcome — id: ${msg.id}</div>`); renderParticipants(msg.participants); sendBtn.disabled=false; if(msg.room_meta) approvalToggle.checked=!!msg.room_meta.require_approval; if(msg.pending) renderPending(msg.pending); break;
-  case 'participants': renderParticipants(msg.participants); break;
-  case 'pending': renderPending(msg.pending); break;
-  case 'join-request': addChat(`<div class='meta'>Join request: ${esc(msg.participant.name)}</div>`); break;
-  case 'participant-joined': addChat(`<div class='meta'>${esc(msg.name)} joined</div>`); break;
-  case 'participant-left': addChat(`<div class='meta'>${esc(msg.name)} left</div>`); break;
+  case 'waiting': waitingBox.classList.remove('hidden'); addChat('<div class=\"meta\">You are waiting for approval</div>'); sendBtn.disabled=true; debugLog('waiting for approval'); break;
+  case 'welcome': waitingBox.classList.add('hidden'); myId=msg.id; hostId=msg.host_id; addChat(`<div class=\"meta\">Welcome — id: ${msg.id}</div>`); renderParticipants(msg.participants); sendBtn.disabled=false; if(msg.room_meta) approvalToggle.checked=!!msg.room_meta.require_approval; if(msg.pending) renderPending(msg.pending); debugLog('welcome received'); break;
+  case 'participants': renderParticipants(msg.participants); debugLog('participants update'); break;
+  case 'pending': renderPending(msg.pending); debugLog('pending update'); break;
+  case 'join-request': addChat(`<div class='meta'>Join request: ${esc(msg.participant.name)}</div>`); debugLog('join-request: '+msg.participant.id); break;
+  case 'participant-joined': addChat(`<div class='meta'>${esc(msg.name)} joined</div>`); debugLog('participant-joined: '+msg.id); break;
+  case 'participant-left': addChat(`<div class='meta'>${esc(msg.name)} left</div>`); debugLog('participant-left: '+msg.id); break;
   case 'chat': addChat(`<strong>${esc(msg.name)}</strong> ${esc(msg.text)}`); break;
   case 'room-meta': if(msg.meta) approvalToggle.checked=!!msg.meta.require_approval; break;
   case 'command': if(msg.cmd==='you-are-rejected'){ addChat('<div class=\'meta\' style=\'color:crimson\'>You were rejected</div>'); if(ws) ws.close(); cleanup() } break;
-  case 'error': addChat(`<div class=\'meta\' style=\'color:crimson\'>Error: ${esc(msg.message)}</div>`); break;
+  case 'error': addChat(`<div class='meta' style='color:crimson'>Error: ${esc(msg.message)}</div>`); debugLog('error: '+msg.message); break;
   default: console.log('msg',msg)
 }}
 
-function cleanup(){ ws=null; myId=null; hostId=null; connectBtn.disabled=false; disconnectBtn.disabled=true; sendBtn.disabled=true; waitingBox.classList.add('hidden'); participantsEl.innerHTML=''; pendingEl.innerHTML=''}
+function cleanup(){ ws=null; myId=null; hostId=null; connectBtn.disabled=false; disconnectBtn.disabled=true; sendBtn.disabled=true; waitingBox.classList.add('hidden'); participantsEl.innerHTML=''; pendingEl.innerHTML=''; debugLog('cleaned up')}
 
 // enter to send
 msgEl.addEventListener('keydown',e=>{ if(e.key==='Enter') sendBtn.click() })
