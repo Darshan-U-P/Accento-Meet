@@ -2,75 +2,122 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Mini Meet — Host/User Demo</title>
+  <title>Mini Meet — Host/User (Approval + Device Selection)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body{font-family:Arial,Helvetica,sans-serif;background:#0b1220;color:#e6eef6;margin:0;padding:12px}
-    .app{max-width:1100px;margin:0 auto}
-    header{display:flex;gap:12px;align-items:center}
-    input,button,select{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:#0f1724;color:inherit}
-    button{cursor:pointer;background:#4f46e5;color:#fff;border:none}
-    .controls{display:flex;gap:8px;margin:10px 0;flex-wrap:wrap}
-    .main{display:flex;gap:12px}
-    .stage{flex:1;background:#081022;padding:12px;border-radius:10px}
-    .sidebar{width:320px;background:#071225;padding:12px;border-radius:10px}
-    #videos{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-    .tile{position:relative;border-radius:8px;background:#000;height:150px;overflow:hidden}
-    video{width:100%;height:100%;object-fit:cover}
+    :root{
+      --bg:#071225; --panel:#081826; --muted:#9aa4b2; --accent:#4f46e5; --card:#0b1220;
+    }
+    *{box-sizing:border-box}
+    body{font-family:Inter,system-ui,Segoe UI,Arial;background:linear-gradient(180deg,#031128 0%, #071224 100%);color:#e6eef6;margin:0;padding:14px}
+    .app{max-width:1180px;margin:0 auto}
+    header{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+    h2{margin:0;font-size:20px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+    .card{background:var(--card);padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
+    label{display:inline-flex;gap:8px;align-items:center;color:var(--muted);font-size:13px}
+    select,input[type=text]{background:transparent;border:1px solid rgba(255,255,255,0.04);color:inherit;padding:8px;border-radius:8px}
+    button{background:var(--accent);color:white;padding:8px 12px;border-radius:8px;border:none;cursor:pointer}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+    .main{display:grid;grid-template-columns:1fr 360px;gap:12px}
+    .stage{background:var(--panel);padding:12px;border-radius:12px;position:relative;min-height:420px}
+    #videos{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+    .tile{position:relative;border-radius:8px;background:#000;height:150px;overflow:hidden;border:1px solid rgba(255,255,255,0.02)}
+    video{width:100%;height:100%;object-fit:cover;display:block}
     .label{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,0.5);padding:4px 8px;border-radius:999px;font-size:12px}
     .host-badge{background:#eab308;color:#08111a;padding:4px 8px;border-radius:999px;margin-left:6px;font-size:11px}
-    .participant{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;margin-bottom:6px;background:rgba(255,255,255,0.02)}
-    .small{font-size:12px;color:#9aa4b2}
-    .muted{opacity:0.6}
+    .sidebar{background:var(--panel);padding:12px;border-radius:12px}
+    .participant{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;margin-bottom:6px;background:rgba(255,255,255,0.01)}
+    .small{font-size:12px;color:var(--muted)}
+    .overlay{position:absolute;inset:0;background:linear-gradient(180deg, rgba(2,6,23,0.85), rgba(2,6,23,0.85));display:flex;align-items:center;justify-content:center;z-index:40;flex-direction:column}
+    .overlay .box{background:rgba(255,255,255,0.03);padding:18px;border-radius:10px;text-align:center}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .device-group{display:flex;gap:8px;align-items:center}
+    .muted-note{color:var(--muted);font-size:12px;margin-top:8px}
+    footer{margin-top:10px;font-size:12px;color:var(--muted)}
   </style>
 </head>
 <body>
   <div class="app">
     <header>
-      <h2>Mini Meet — Host/User</h2>
-      <div class="small">Demo: host controls (mute/kick/make-host)</div>
+      <h2>Mini Meet — Device selection + Host Approval</h2>
+      <div class="small">Choose camera, microphone and output device. Host can approve joiners.</div>
     </header>
 
-    <div class="controls">
-      <label>Name: <input id="displayName" value="Guest"/></label>
-      <label>Room: <input id="roomId" value="testroom"/></label>
+    <div class="controls card">
+      <label> Name: <input id="displayName" value="Guest" /></label>
+      <label> Room: <input id="roomId" value="testroom" /></label>
       <button id="joinBtn">Join Room</button>
-      <button id="leaveBtn" disabled>Leave</button>
+      <button id="leaveBtn" disabled class="ghost">Leave</button>
+
+      <div style="width:16px"></div>
+
+      <div class="device-group">
+        <label> Camera:
+          <select id="cameraSelect"></select>
+        </label>
+        <label> Microphone:
+          <select id="micSelect"></select>
+        </label>
+        <label> Output:
+          <select id="outputSelect"></select>
+        </label>
+      </div>
 
       <div style="flex:1"></div>
 
-      <button id="muteBtn" disabled>Mute</button>
-      <button id="cameraBtn" disabled>Stop Camera</button>
-      <button id="shareBtn" disabled>Share Screen</button>
+      <button id="muteBtn" disabled class="ghost">Mute</button>
+      <button id="cameraBtn" disabled class="ghost">Stop Camera</button>
+      <button id="shareBtn" disabled class="ghost">Share Screen</button>
     </div>
 
     <div class="main">
       <section class="stage">
         <div id="videos"></div>
-        <div class="small" style="margin-top:8px">Your id: <span id="myId">—</span> • <span id="roleLabel">—</span></div>
+        <div class="small" style="margin-top:10px">Your id: <span id="myId">—</span> • <span id="roleLabel">—</span></div>
+
+        <div id="waitingOverlay" class="overlay" style="display:none">
+          <div class="box">
+            <h3 style="margin:6px 0">Waiting for host approval</h3>
+            <div class="small">Host will accept or reject your request to join the room.</div>
+            <div style="margin-top:12px"><button id="leaveWhileWaiting" class="ghost">Leave</button></div>
+          </div>
+        </div>
       </section>
 
-      <aside class="sidebar">
+      <aside class="sidebar card">
         <h3>Participants</h3>
         <div id="participantsList"></div>
-        <h4>Chat</h4>
-        <div id="chatLog" style="height:200px;overflow:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px"></div>
+
+        <div id="pendingSection" style="margin-top:12px; display:none">
+          <h4>Pending requests</h4>
+          <div id="pendingList" class="pending-list"></div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
+          <div class="small">Require approval</div>
+          <label class="toggle"><input id="approvalToggle" type="checkbox" /> <span class="small">Host-only</span></label>
+        </div>
+
+        <h4 style="margin-top:12px">Chat</h4>
+        <div id="chatLog" style="height:180px;overflow:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px"></div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <input id="chatInput" placeholder="Message..." style="flex:1"/>
+          <input id="chatInput" placeholder="Message..." style="flex:1" />
           <button id="sendChat" disabled>Send</button>
         </div>
+
+        <div class="muted-note">Note: audio output selection requires browser support (setSinkId).</div>
       </aside>
     </div>
+
+    <footer class="small">P2P mesh demo • For larger rooms use an SFU (mediasoup/janus/LiveKit). Use TURN in production.</footer>
   </div>
 
 <script>
-/* Frontend supporting host/user roles and host controls.
-   Works with server.py message format:
-   - client sends initial {"type":"join","displayName":"Alice"}
-   - server replies {"type":"welcome","client_id":..., "participants": [...], "host_id": ...}
-   - server broadcasts participant changes, participants-update
-   - host actions use {"type":"action","action":"mute","target":"id"}
-   - server sends commands to clients: {"type":"command","cmd":"force-mute"} or "you-are-kicked"
+/* Updated frontend: device selection + improved UI
+   - Select camera, microphone and output devices
+   - Switch devices on the fly (replaces tracks and updates senders)
+   - Set audio output (sinkId) for remote video elements if supported
 */
 
 const displayNameInput = document.getElementById('displayName');
@@ -89,34 +136,161 @@ const muteBtn = document.getElementById('muteBtn');
 const cameraBtn = document.getElementById('cameraBtn');
 const shareBtn = document.getElementById('shareBtn');
 
+const cameraSelect = document.getElementById('cameraSelect');
+const micSelect = document.getElementById('micSelect');
+const outputSelect = document.getElementById('outputSelect');
+
+const waitingOverlay = document.getElementById('waitingOverlay');
+const leaveWhileWaiting = document.getElementById('leaveWhileWaiting');
+const pendingSection = document.getElementById('pendingSection');
+const pendingList = document.getElementById('pendingList');
+const approvalToggle = document.getElementById('approvalToggle');
+
 let ws = null;
 let myId = null;
 let hostId = null;
 let localStream = null;
 let pcs = {};
-let videoEls = {};
-let senders = {};
+let videoEls = {};   // peerId -> video element
+let senders = {};    // peerId -> {audioSender, videoSender}
 let isMuted = false;
 let camOn = true;
+let isWaiting = false;
+let currentOutputDeviceId = null;
+
 const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 
 function logChat(text) {
   const d = document.createElement('div'); d.textContent = text; chatLog.appendChild(d); chatLog.scrollTop = chatLog.scrollHeight;
 }
+function logChatSystem(text){ logChat(`[system] ${text}`); }
 
-/* UI helpers */
+/* ---------------- Device management ---------------- */
+
+async function enumerateAndPopulateDevices() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === 'videoinput');
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    const outputs = devices.filter(d => d.kind === 'audiooutput');
+
+    // populate camera select
+    cameraSelect.innerHTML = '';
+    cams.forEach(c => {
+      const o = document.createElement('option'); o.value = c.deviceId; o.textContent = c.label || `Camera ${cameraSelect.length+1}`;
+      cameraSelect.appendChild(o);
+    });
+
+    // populate mic select
+    micSelect.innerHTML = '';
+    mics.forEach(m => {
+      const o = document.createElement('option'); o.value = m.deviceId; o.textContent = m.label || `Mic ${micSelect.length+1}`;
+      micSelect.appendChild(o);
+    });
+
+    // populate outputs
+    outputSelect.innerHTML = '';
+    outputs.forEach(oDev => {
+      const o = document.createElement('option'); o.value = oDev.deviceId; o.textContent = oDev.label || `Speaker ${outputSelect.length+1}`;
+      outputSelect.appendChild(o);
+    });
+
+    // keep current selection if exists
+    if (!cameraSelect.value && cameraSelect.options.length) cameraSelect.selectedIndex = 0;
+    if (!micSelect.value && micSelect.options.length) micSelect.selectedIndex = 0;
+    if (!outputSelect.value && outputSelect.options.length) outputSelect.selectedIndex = 0;
+
+    currentOutputDeviceId = outputSelect.value || null;
+  } catch (e) {
+    console.warn('enumerateDevices failed', e);
+  }
+}
+
+// When devices change (plug/unplug)
+navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', enumerateAndPopulateDevices);
+
+/* Replace local tracks based on selects */
+async function applySelectedDevices() {
+  const camId = cameraSelect.value;
+  const micId = micSelect.value;
+
+  // build constraints
+  const constraints = {
+    video: camId ? { deviceId: { exact: camId } } : { facingMode: 'user' },
+    audio: micId ? { deviceId: { exact: micId } } : true
+  };
+
+  // stop existing local tracks
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+  }
+
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    addOrReplaceLocalTile(localStream);
+
+    // update senders for each peer
+    for (const peerId of Object.keys(senders)) {
+      // video
+      const vTrack = localStream.getVideoTracks()[0];
+      if (senders[peerId].videoSender && vTrack) {
+        try { await senders[peerId].videoSender.replaceTrack(vTrack); } catch(e){ console.warn('replace video failed', e); }
+      }
+      // audio
+      const aTrack = localStream.getAudioTracks()[0];
+      if (senders[peerId].audioSender && aTrack) {
+        try { await senders[peerId].audioSender.replaceTrack(aTrack); } catch(e){ console.warn('replace audio failed', e); }
+      }
+    }
+    // enable controls
+    muteBtn.disabled = cameraBtn.disabled = shareBtn.disabled = sendChat.disabled = false;
+  } catch (e) {
+    console.error('getUserMedia failed', e);
+    alert('Could not access camera/microphone. Check permissions.');
+  }
+}
+
+/* Set audio output (sinkId) for all remote elements (if supported) */
+async function setOutputDeviceForAll(deviceId) {
+  currentOutputDeviceId = deviceId;
+  const elems = Object.values(videoEls);
+  for (const el of elems) {
+    // video elements with audio tracks can use setSinkId (browser support varies)
+    if (typeof el.sinkId !== 'undefined' && deviceId) {
+      try {
+        await el.setSinkId(deviceId);
+      } catch (e) {
+        console.warn('setSinkId failed', e);
+      }
+    }
+  }
+}
+
+/* When user changes selects */
+cameraSelect.onchange = async () => {
+  await applySelectedDevices();
+};
+micSelect.onchange = async () => {
+  await applySelectedDevices();
+};
+outputSelect.onchange = async () => {
+  await setOutputDeviceForAll(outputSelect.value);
+};
+
+/* ---------------- UI helpers & participants ---------------- */
+
 function setRoleLabel() {
   if (!myId) { roleLabel.textContent = '—'; return; }
   roleLabel.textContent = (myId === hostId) ? 'Host' : 'Participant';
+  pendingSection.style.display = (myId === hostId) ? 'block' : 'none';
 }
 
-/* Participant list rendering */
 function renderParticipants(participants) {
   participantsList.innerHTML = '';
   participants.forEach(p => {
     const el = document.createElement('div'); el.className = 'participant';
     const left = document.createElement('div');
-    left.innerHTML = `<strong>${p.displayName}</strong> <span class="small">(${p.id})</span>`;
+    left.innerHTML = `<strong>${escapeHtml(p.displayName)}</strong> <div class="small">${p.id}</div>`;
     if (p.is_host) {
       const hb = document.createElement('span'); hb.className='host-badge'; hb.textContent='HOST';
       left.appendChild(hb);
@@ -124,29 +298,18 @@ function renderParticipants(participants) {
     el.appendChild(left);
 
     const right = document.createElement('div');
-
-    // If I am host, show controls for others (cannot act on self except transfer)
     if (myId && myId === hostId && p.id !== myId) {
       const mute = document.createElement('button'); mute.textContent='Mute'; mute.style.marginRight='6px';
-      mute.onclick = () => sendAction('mute', p.id);
-      right.appendChild(mute);
+      mute.onclick = () => sendAction('mute', p.id); right.appendChild(mute);
 
       const kick = document.createElement('button'); kick.textContent='Kick'; kick.style.marginRight='6px';
-      kick.onclick = () => {
-        if (confirm(`Kick ${p.displayName}?`)) sendAction('kick', p.id);
-      };
-      right.appendChild(kick);
+      kick.onclick = () => { if (confirm(`Kick ${p.displayName}?`)) sendAction('kick', p.id); }; right.appendChild(kick);
 
       const makeHost = document.createElement('button'); makeHost.textContent='Make Host';
-      makeHost.onclick = () => {
-        if (confirm(`Make ${p.displayName} host?`)) sendAction('make-host', p.id);
-      };
-      right.appendChild(makeHost);
+      makeHost.onclick = () => { if (confirm(`Make ${p.displayName} host?`)) sendAction('make-host', p.id); }; right.appendChild(makeHost);
     } else {
-      // non-host view: if the participant is self show small badge
       if (p.id === myId) {
-        const me = document.createElement('span'); me.className='small'; me.textContent='You';
-        right.appendChild(me);
+        const me = document.createElement('span'); me.className='small'; me.textContent='You'; right.appendChild(me);
       }
     }
 
@@ -155,28 +318,39 @@ function renderParticipants(participants) {
   });
 }
 
-/* WebSocket / signaling */
+/* Pending request UI */
+function addPendingRequest(participant) {
+  const wrapper = document.createElement('div'); wrapper.className = 'pending-item'; wrapper.id = `pending-${participant.id}`;
+  wrapper.style.display = 'flex'; wrapper.style.justifyContent = 'space-between'; wrapper.style.alignItems = 'center';
+  wrapper.innerHTML = `<div><strong>${escapeHtml(participant.displayName)}</strong><div class="small">${participant.id}</div></div>`;
+  const actions = document.createElement('div');
 
-function sendWS(payload) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify(payload));
+  const accept = document.createElement('button'); accept.textContent = 'Accept'; accept.style.marginRight='6px';
+  accept.onclick = () => { sendAction('accept', participant.id); wrapper.remove(); };
+  const reject = document.createElement('button'); reject.textContent = 'Reject';
+  reject.onclick = () => { if (confirm(`Reject ${participant.displayName}?`)) { sendAction('reject', participant.id); wrapper.remove(); }};
+
+  actions.appendChild(accept); actions.appendChild(reject);
+  wrapper.appendChild(actions);
+  pendingList.appendChild(wrapper);
 }
+function removePendingRequest(id){ const el=document.getElementById(`pending-${id}`); if(el) el.remove(); }
+
+/* ---------------- WebSocket / signaling ---------------- */
+
+function sendWS(payload) { if (!ws || ws.readyState !== WebSocket.OPEN) return; ws.send(JSON.stringify(payload)); }
 
 async function startLocalMedia() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    addOrReplaceLocalTile(localStream);
-    muteBtn.disabled = cameraBtn.disabled = shareBtn.disabled = sendChat.disabled = false;
-  } catch (e) {
-    alert('Camera/microphone access required');
-  }
+  // Use selected devices if any
+  await enumerateAndPopulateDevices(); // ensure selects populated
+  await applySelectedDevices();
 }
 
 function addOrReplaceLocalTile(stream) {
   const id = 'local';
   if (!videoEls[id]) {
     const tile = document.createElement('div'); tile.className='tile'; tile.id=`tile-${id}`;
-    const v = document.createElement('video'); v.autoplay = true; v.muted = true; v.playsInline = true; v.id=`video-${id}`;
+    const v = document.createElement('video'); v.autoplay=true; v.muted=true; v.playsInline=true; v.id=`video-${id}`;
     tile.appendChild(v);
     const label = document.createElement('div'); label.className='label'; label.textContent='You';
     tile.appendChild(label);
@@ -186,121 +360,86 @@ function addOrReplaceLocalTile(stream) {
   videoEls[id].srcObject = stream;
 }
 
+/* create remote tile and apply sinkId for output routing */
 function addRemoteTile(peerId, stream) {
   if (videoEls[peerId]) {
     videoEls[peerId].srcObject = stream;
     return;
   }
   const tile = document.createElement('div'); tile.className='tile'; tile.id=`tile-${peerId}`;
-  const v = document.createElement('video'); v.autoplay = true; v.playsInline = true; v.id=`video-${peerId}`;
+  const v = document.createElement('video'); v.autoplay=true; v.playsInline=true; v.id=`video-${peerId}`; v.controls=false;
+  // Ensure remote audio plays automatically where allowed
+  v.autoplay = true;
+  v.muted = false;
   tile.appendChild(v);
   const label = document.createElement('div'); label.className='label'; label.textContent = peerId;
   tile.appendChild(label);
   videos.appendChild(tile);
   videoEls[peerId] = v;
   v.srcObject = stream;
+
+  // attempt to set output device if supported
+  if (currentOutputDeviceId && typeof v.setSinkId === 'function') {
+    v.setSinkId(currentOutputDeviceId).catch(e => console.warn('setSinkId error', e));
+  } else if (typeof v.setSinkId !== 'function') {
+    // no-op; browsers differ in support
+  }
 }
 
-function removeRemoteTile(peerId) {
-  const el = document.getElementById(`tile-${peerId}`);
-  if (el) el.remove();
-  if (videoEls[peerId]) delete videoEls[peerId];
-}
+function removeRemoteTile(peerId) { const el=document.getElementById(`tile-${peerId}`); if(el) el.remove(); if(videoEls[peerId]) delete videoEls[peerId]; }
 
 /* Handle server messages */
 async function handleSignal(msg) {
   switch(msg.type) {
-    case 'welcome':
-      myId = msg.client_id;
-      hostId = msg.host_id;
-      myIdLabel.textContent = myId;
-      setRoleLabel();
-      renderParticipants(msg.participants || []);
-      // Create offers to existing participants (except self)
-      for (const p of msg.participants || []) {
-        if (p.id !== myId) await createOffer(p.id);
-      }
+    case 'waiting':
+      isWaiting = true; waitingOverlay.style.display = 'flex'; joinBtn.disabled=true; leaveBtn.disabled=false; logChatSystem('Waiting for host approval...');
       break;
 
-    case 'participant-joined':
-      renderParticipants_append(msg.participant);
-      logChatSystem(`${msg.participant.displayName} joined`);
+    case 'join-request':
+      addPendingRequest(msg.participant); logChatSystem(`Join request: ${msg.participant.displayName}`);
+      break;
+
+    case 'welcome':
+      isWaiting=false; waitingOverlay.style.display='none'; myId=msg.client_id; hostId=msg.host_id; myIdLabel.textContent=myId;
+      setRoleLabel(); renderParticipants(msg.participants||[]);
+      // create offers to existing participants (except self)
+      for (const p of msg.participants||[]) { if (p.id !== myId) await createOffer(p.id); }
       break;
 
     case 'participants-update':
-      hostId = msg.host_id;
-      setRoleLabel();
-      renderParticipants(msg.participants || []);
+      hostId = msg.host_id; setRoleLabel(); renderParticipants(msg.participants||[]);
+      if (Array.isArray(msg.participants)) msg.participants.forEach(p => removePendingRequest(p.id));
+      break;
+
+    case 'participant-joined':
+      logChatSystem(`${msg.participant.displayName} joined`); removePendingRequest(msg.participant.id);
       break;
 
     case 'participant-left':
-      logChatSystem(`${msg.displayName} left`);
-      removeRemoteTile(msg.id);
+      logChatSystem(`${msg.displayName} left`); removeRemoteTile(msg.id);
       break;
 
-    case 'offer':
-      if (msg.to && msg.to !== myId) return;
-      await handleOffer(msg);
-      break;
+    case 'room-meta':
+      const meta = msg.meta || {}; approvalToggle.checked = !!meta.require_approval; break;
 
-    case 'answer':
-      if (msg.to && msg.to !== myId) return;
-      await handleAnswer(msg);
-      break;
-
-    case 'ice-candidate':
-      if (msg.to && msg.to !== myId) return;
-      await handleRemoteICE(msg);
-      break;
-
-    case 'chat':
-      logChat(`[${msg.from}] ${msg.text}`);
-      break;
+    case 'offer': if (msg.to && msg.to !== myId) return; await handleOffer(msg); break;
+    case 'answer': if (msg.to && msg.to !== myId) return; await handleAnswer(msg); break;
+    case 'ice-candidate': if (msg.to && msg.to !== myId) return; await handleRemoteICE(msg); break;
+    case 'chat': logChat(`[${msg.from}] ${msg.text}`); break;
 
     case 'command':
-      // commands from server: force-mute, you-are-kicked, etc.
-      if (msg.cmd === 'force-mute') {
-        // mute local mic
-        if (localStream) {
-          localStream.getAudioTracks().forEach(t => t.enabled = false);
-          isMuted = true; muteBtn.textContent = 'Unmute';
-        }
-        logChatSystem(`System: You were asked to mute by ${msg.from || 'host'}`);
-      } else if (msg.cmd === 'you-are-kicked') {
-        logChatSystem('System: You were kicked by host.');
-        // Close websocket and cleanup
-        if (ws) ws.close();
-        cleanupAll();
-      }
+      if (msg.cmd === 'force-mute') { if (localStream) { localStream.getAudioTracks().forEach(t=>t.enabled=false); isMuted=true; muteBtn.textContent='Unmute'; } logChatSystem(`Asked to mute by ${msg.from||'host'}`); }
+      else if (msg.cmd === 'you-are-kicked') { logChatSystem('You were kicked by host.'); if (ws) ws.close(); cleanupAll(); }
+      else if (msg.cmd === 'you-are-rejected') { logChatSystem('Join request rejected by host.'); if (ws) ws.close(); cleanupAll(); }
       break;
 
-    case 'room-lock':
-      // optional: show lock state
-      logChatSystem(`Room locked: ${msg.locked}`);
-      break;
-
-    case 'system':
-      if (msg.message) logChatSystem(msg.message);
-      break;
-
-    case 'error':
-      console.warn('Server error:', msg.message);
-      break;
-
-    default:
-      console.log('Unknown message', msg);
+    case 'system': if (msg.message) logChatSystem(msg.message); break;
+    case 'error': console.warn('Server error:', msg.message); break;
+    default: console.log('Unknown message', msg);
   }
 }
 
-/* helpers */
-function renderParticipants_append(p) {
-  // fetch current list from DOM isn't tracked here; better to request participants update from server
-  // but server broadcasts participants-update on joins; we'll request no-op here
-  // fallback: just add tile label for id
-  logChatSystem(`${p.displayName} joined (id: ${p.id})`);
-}
-
-/* WebRTC functions */
+/* WebRTC helpers */
 function makePeerConnection(peerId) {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   if (localStream) {
@@ -312,21 +451,9 @@ function makePeerConnection(peerId) {
     }
   }
 
-  pc.onicecandidate = ev => {
-    if (ev.candidate) sendWS({ type: 'ice-candidate', to: peerId, candidate: ev.candidate });
-  };
-
-  pc.ontrack = ev => {
-    addRemoteTile(peerId, ev.streams[0]);
-  };
-
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-      try { pc.close(); } catch(e){}
-      delete pcs[peerId];
-      removeRemoteTile(peerId);
-    }
-  };
+  pc.onicecandidate = ev => { if (ev.candidate) sendWS({ type:'ice-candidate', to:peerId, candidate:ev.candidate, from:myId }); };
+  pc.ontrack = ev => { addRemoteTile(peerId, ev.streams[0]); };
+  pc.onconnectionstatechange = () => { if (pc.connectionState==='failed' || pc.connectionState==='closed') { try{pc.close()}catch(e){} delete pcs[peerId]; removeRemoteTile(peerId); } };
 
   pcs[peerId] = pc;
   return pc;
@@ -334,100 +461,73 @@ function makePeerConnection(peerId) {
 
 async function createOffer(peerId) {
   if (!localStream) await startLocalMedia();
+  if (!myId) return;
   if (pcs[peerId]) return;
   const pc = makePeerConnection(peerId);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  sendWS({ type: 'offer', to: peerId, sdp: offer.sdp, sdpType: offer.type, from: myId });
+  sendWS({ type:'offer', to:peerId, sdp:offer.sdp, sdpType:offer.type, from:myId });
 }
 
 async function handleOffer(msg) {
-  const from = msg.from;
-  if (!from) return;
+  const from = msg.from; if (!from) return;
   if (!pcs[from]) makePeerConnection(from);
   const pc = pcs[from];
-  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+  await pc.setRemoteDescription({ type:'offer', sdp: msg.sdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  sendWS({ type: 'answer', to: from, sdp: answer.sdp, sdpType: answer.type, from: myId });
+  sendWS({ type:'answer', to:from, sdp:answer.sdp, sdpType:answer.type, from:myId });
 }
 
 async function handleAnswer(msg) {
-  const from = msg.from;
-  if (!from) return;
-  const pc = pcs[from];
-  if (!pc) return;
-  await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+  const from = msg.from; if (!from) return;
+  const pc = pcs[from]; if (!pc) return;
+  await pc.setRemoteDescription({ type:'answer', sdp: msg.sdp });
 }
 
 async function handleRemoteICE(msg) {
-  const from = msg.from;
-  const pc = pcs[from];
-  if (!pc) return;
-  try {
-    await pc.addIceCandidate(msg.candidate);
-  } catch (e) {
-    console.warn('ICE add error', e);
-  }
+  const from = msg.from; const pc = pcs[from]; if (!pc) return;
+  try { await pc.addIceCandidate(msg.candidate); } catch (e) { console.warn('ICE add error', e); }
 }
 
-/* Host action helper */
-function sendAction(action, target) {
-  sendWS({ type: 'action', action, target });
-}
+/* Host actions */
+function sendAction(action, target, extra={}) { const payload = { type:'action', action, target, ...extra }; sendWS(payload); }
 
 /* UI actions */
 joinBtn.onclick = async () => {
   if (ws) return;
+  await enumerateAndPopulateDevices();
+  // apply selected devices only after permissions; startLocalMedia will request
   const name = displayNameInput.value.trim() || 'Guest';
   const room = roomInput.value.trim() || 'testroom';
   const protocol = (location.protocol === 'https:') ? 'wss' : 'ws';
   const url = `${protocol}://${location.host}/ws/${encodeURIComponent(room)}`;
   ws = new WebSocket(url);
 
-  ws.onopen = () => {
-    // immediately send join message
-    sendWS({ type: 'join', displayName: name });
-    joinBtn.disabled = true;
-    leaveBtn.disabled = false;
-  };
-
-  ws.onmessage = evt => {
-    try { const msg = JSON.parse(evt.data); handleSignal(msg); } catch(e){console.error(e);}
-  };
-  ws.onclose = () => {
-    cleanupAll();
-  };
+  ws.onopen = () => { sendWS({ type:'join', displayName: name }); joinBtn.disabled=true; leaveBtn.disabled=false; };
+  ws.onmessage = evt => { try { const msg=JSON.parse(evt.data); handleSignal(msg); } catch(e){ console.error(e); } };
+  ws.onclose = () => { cleanupAll(); };
   ws.onerror = e => console.error('ws error', e);
 
   await startLocalMedia();
 };
 
-leaveBtn.onclick = () => {
-  if (ws) ws.close();
-  cleanupAll();
+leaveBtn.onclick = () => { if (ws) ws.close(); cleanupAll(); };
+leaveWhileWaiting.onclick = () => { if (ws) ws.close(); cleanupAll(); };
+
+approvalToggle.onchange = () => {
+  if (myId !== hostId) { approvalToggle.checked = !approvalToggle.checked; alert('Only host may toggle approval'); return; }
+  sendAction('set-approval', null, { value: approvalToggle.checked });
 };
 
-muteBtn.onclick = () => {
-  if (!localStream) return;
-  isMuted = !isMuted;
-  localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
-  muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
-};
-
-cameraBtn.onclick = () => {
-  if (!localStream) return;
-  camOn = !camOn;
-  localStream.getVideoTracks().forEach(t => t.enabled = camOn);
-  cameraBtn.textContent = camOn ? 'Stop Camera' : 'Start Camera';
-};
+muteBtn.onclick = () => { if (!localStream) return; isMuted = !isMuted; localStream.getAudioTracks().forEach(t=>t.enabled=!isMuted); muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; };
+cameraBtn.onclick = () => { if (!localStream) return; camOn = !camOn; localStream.getVideoTracks().forEach(t=>t.enabled = camOn); cameraBtn.textContent = camOn ? 'Stop Camera' : 'Start Camera'; };
 
 shareBtn.onclick = async () => {
   if (!ws) { alert('Join a room first'); return; }
   try {
     const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
     const screenTrack = screenStream.getVideoTracks()[0];
-    // replace for each peer
     for (const peerId of Object.keys(senders)) {
       const s = senders[peerId].videoSender;
       if (s) await s.replaceTrack(screenTrack);
@@ -444,48 +544,33 @@ shareBtn.onclick = async () => {
   } catch (e) { console.error('screen share failed', e); }
 };
 
-/* Chat */
-sendChat.onclick = () => {
-  const t = chatInput.value.trim();
-  if (!t || !ws) return;
-  sendWS({ type: 'chat', text: t });
-  logChat(`[me] ${t}`);
-  chatInput.value = '';
-};
-
-/* System log helpers */
-function logChat(msg) { logChatGeneric(msg); }
-function logChatSystem(msg) { logChatGeneric(`System: ${msg}`); }
-function logChatGeneric(msg) {
-  const d = document.createElement('div'); d.textContent = msg; chatLog.appendChild(d); chatLog.scrollTop = chatLog.scrollHeight;
-}
+sendChat.onclick = () => { const t = chatInput.value.trim(); if (!t || !ws) return; sendWS({ type:'chat', text: t }); logChat(`[me] ${t}`); chatInput.value=''; };
 
 /* Cleanup */
 function cleanupAll() {
-  myId = null; hostId = null;
-  myIdLabel.textContent = '—'; roleLabel.textContent = '—';
-  // close pcs
-  Object.values(pcs).forEach(pc => { try{pc.close()}catch(e){} });
-  pcs = {};
-  // stop local
-  if (localStream) {
-    localStream.getTracks().forEach(t => t.stop());
-    localStream = null;
-  }
-  // remove tiles except local
-  Object.keys(videoEls).forEach(k => {
-    if (k !== 'local') removeRemoteTile(k);
-    else {
-      // remove local tile
-      const el = document.getElementById('tile-local');
-      if (el) el.remove();
-      delete videoEls['local'];
-    }
-  });
-  if (ws) { try{ ws.close(); } catch(e){} ws = null; }
-  joinBtn.disabled = false; leaveBtn.disabled = true;
-  muteBtn.disabled = cameraBtn.disabled = shareBtn.disabled = sendChat.disabled = true;
+  myId=null; hostId=null; isWaiting=false;
+  myIdLabel.textContent='—'; roleLabel.textContent='—';
+  waitingOverlay.style.display='none'; pendingList.innerHTML=''; approvalToggle.checked=false;
+  Object.values(pcs).forEach(pc=>{ try{pc.close()}catch(e){} }); pcs={};
+  if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+  Object.keys(videoEls).forEach(k=>{ const el=document.getElementById(`tile-${k}`); if (el) el.remove(); });
+  videoEls={}; senders={};
+  if (ws) { try{ws.close()}catch(e){} ws=null; }
+  joinBtn.disabled=false; leaveBtn.disabled=true;
+  muteBtn.disabled=true; cameraBtn.disabled=true; shareBtn.disabled=true; sendChat.disabled=true;
 }
+
+/* Utility */
+function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g,c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* Init: populate devices on load */
+(async function init() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    console.warn('enumerateDevices not supported');
+    return;
+  }
+  await enumerateAndPopulateDevices();
+})();
 </script>
 </body>
 </html>
