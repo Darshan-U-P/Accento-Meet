@@ -5,7 +5,6 @@
   <title>Mini Meet — Device selection + Host Approval</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    /* minimal styling - use your previous CSS or keep this */
     body{font-family:Arial,Helvetica,sans-serif;background:#0b1220;color:#e6eef6;margin:0;padding:14px}
     .app{max-width:1180px;margin:0 auto}
     .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
@@ -85,7 +84,7 @@
   </div>
 
 <script>
-/* Client side signaling + WebRTC with logging and need-offer support */
+/* Client side signaling + WebRTC with device selection fixes */
 
 const displayNameInput = document.getElementById('displayName');
 const roomInput = document.getElementById('roomId');
@@ -124,43 +123,81 @@ let isWaiting = false;
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
-  // For testing NAT issues you can add a TURN server here:
-  // { urls: "turn:YOUR_TURN_HOST:3478", username: "user", credential: "pass" }
+  // Add TURN server here if needed for NAT traversal
 ];
 
+// simple logger into chat log
 function log(msg) {
   const d = document.createElement('div'); d.textContent = msg; chatLog.appendChild(d); chatLog.scrollTop = chatLog.scrollHeight;
 }
 function logSys(msg){ log(`[system] ${msg}`); }
 
-/* populate devices */
+/* populate devices - only updates dropdowns, does NOT auto-apply */
 async function enumerateAndPopulateDevices() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const cams = devices.filter(d => d.kind === 'videoinput');
     const mics = devices.filter(d => d.kind === 'audioinput');
 
+    // remember currently selected ids if present
+    const prevCam = cameraSelect.value;
+    const prevMic = micSelect.value;
+
     cameraSelect.innerHTML = '';
-    cams.forEach(c => {
-      const opt = document.createElement('option'); opt.value = c.deviceId; opt.textContent = c.label || `Camera ${cameraSelect.length+1}`;
+    cams.forEach((c, idx) => {
+      const opt = document.createElement('option');
+      opt.value = c.deviceId;
+      // show friendly label when possible, fallback to index
+      opt.textContent = c.label || `Camera ${idx+1}`;
       cameraSelect.appendChild(opt);
     });
 
     micSelect.innerHTML = '';
-    mics.forEach(m => {
-      const opt = document.createElement('option'); opt.value = m.deviceId; opt.textContent = m.label || `Mic ${micSelect.length+1}`;
+    mics.forEach((m, idx) => {
+      const opt = document.createElement('option');
+      opt.value = m.deviceId;
+      opt.textContent = m.label || `Mic ${idx+1}`;
       micSelect.appendChild(opt);
     });
 
-    if (!cameraSelect.value && cameraSelect.options.length) cameraSelect.selectedIndex = 0;
-    if (!micSelect.value && micSelect.options.length) micSelect.selectedIndex = 0;
+    // restore previous selection if still present
+    if (prevCam && Array.from(cameraSelect.options).some(o => o.value === prevCam)) {
+      cameraSelect.value = prevCam;
+    } else if (cameraSelect.options.length) {
+      // pick the first device by default (do not auto-apply to media stream here)
+      cameraSelect.selectedIndex = 0;
+    }
+
+    if (prevMic && Array.from(micSelect.options).some(o => o.value === prevMic)) {
+      micSelect.value = prevMic;
+    } else if (micSelect.options.length) {
+      micSelect.selectedIndex = 0;
+    }
   } catch (e) {
     console.warn('enumerateDevices failed', e);
   }
 }
 
-navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', enumerateAndPopulateDevices);
+// Listen to devicechange but DO NOT automatically call getUserMedia or switch streams.
+// Only refresh lists and preserve current selection.
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    console.log('devicechange event — refreshing device list (no auto-switch)');
+    const previousCam = cameraSelect.value;
+    const previousMic = micSelect.value;
+    await enumerateAndPopulateDevices();
+    // restore previous selection if still present
+    if (previousCam && Array.from(cameraSelect.options).some(o => o.value === previousCam)) {
+      cameraSelect.value = previousCam;
+    }
+    if (previousMic && Array.from(micSelect.options).some(o => o.value === previousMic)) {
+      micSelect.value = previousMic;
+    }
+    // do NOT call applySelectedDevices() automatically
+  });
+}
 
+/* Use the selected devices explicitly (call this on join or when user changes selects) */
 async function applySelectedDevices() {
   const camId = cameraSelect.value;
   const micId = micSelect.value;
@@ -174,7 +211,14 @@ async function applySelectedDevices() {
   }
 
   try {
-    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      console.warn('getUserMedia with constraints failed, trying default constraints', constraints, err);
+      // fallback to default device selection
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    }
+
     addOrReplaceLocalTile(localStream);
 
     // replace tracks for existing peers
@@ -191,7 +235,8 @@ async function applySelectedDevices() {
 
     muteBtn.disabled = cameraBtn.disabled = shareBtn.disabled = sendChat.disabled = false;
   } catch (e) {
-    alert('Camera/microphone access required');
+    alert('Cannot access camera/microphone. Check permissions or if another app is using the camera.');
+    console.error('applySelectedDevices failed', e);
   }
 }
 
@@ -288,7 +333,7 @@ async function handleSignal(msg) {
       setRoleLabel();
       renderParticipants(msg.participants || []);
 
-      // Create offers to existing participants (except self) - some peers may instead request need-offer
+      // Create offers to existing participants (except self)
       for (const p of msg.participants || []) {
         if (p.id !== myId) {
           console.log('welcome -> createOffer for', p.id);
@@ -317,9 +362,7 @@ async function handleSignal(msg) {
       break;
 
     case 'need-offer':
-      // server asks this client to create an offer for a newly approved participant
       console.log('need-offer received, create offer to', msg.target);
-      // If the target is not self, create an offer TO the target (target will answer)
       if (msg.target && msg.target !== myId) {
         await createOffer(msg.target);
       }
@@ -527,6 +570,16 @@ shareBtn.onclick = async () => {
 };
 
 sendChat.onclick = () => { const t = chatInput.value.trim(); if (!t || !ws) return; sendWS({ type:'chat', text:t }); log(`[me] ${t}`); chatInput.value=''; };
+
+/* manual device change handlers */
+cameraSelect.onchange = async () => {
+  console.log('cameraSelect changed by user', cameraSelect.value);
+  await applySelectedDevices();
+};
+micSelect.onchange = async () => {
+  console.log('micSelect changed by user', micSelect.value);
+  await applySelectedDevices();
+};
 
 /* cleanup */
 function cleanupAll() {
