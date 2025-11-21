@@ -2,13 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Chat — Simple Approval Demo</title>
+  <title>Chat + Audio — Approval Demo</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    /* Simple, minimal UI */
     :root{--bg:#0f1724;--card:#071225;--muted:#9aa4b2}
     body{font-family:Inter,Arial,Helvetica,sans-serif;background:var(--bg);color:#e6eef6;margin:0;padding:16px}
-    .wrap{max-width:880px;margin:0 auto}
+    .wrap{max-width:980px;margin:0 auto}
     header{display:flex;align-items:center;gap:12px}
     input,button{padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:var(--card);color:inherit}
     button{background:#6d28d9;border:none;cursor:pointer}
@@ -16,23 +15,22 @@
     .main{display:flex;gap:12px;margin-top:12px}
     .left{flex:1}
     .panel{background:var(--card);padding:12px;border-radius:8px}
-    #chat{height:360px;overflow:auto;padding:8px;border-radius:6px;background:#081022}
+    #chat{height:240px;overflow:auto;padding:8px;border-radius:6px;background:#081022}
     .msg{margin-bottom:8px}
     .meta{font-size:12px;color:var(--muted)}
     .participants, .pending{margin-top:8px}
     .small{font-size:13px;color:var(--muted)}
     .hidden{display:none}
-    .host-badge{display:inline-block;background:#eab308;color:#08111a;padding:2px 8px;border-radius:999px;font-size:11px;margin-left:8px}
     .participant-row{display:flex;justify-content:space-between;align-items:center;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:6px}
-    .pending-controls{display:flex;gap:6px;margin-top:8px}
-    .muted{opacity:.6}
+    .host-badge{display:inline-block;background:#eab308;color:#08111a;padding:2px 8px;border-radius:999px;font-size:11px;margin-left:8px}
+    .audio-tile{margin-top:8px;padding:8px;border-radius:6px;background:rgba(255,255,255,0.01)}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h3>Chat — Simple Approval</h3>
-      <div class="small">(kept minimal)</div>
+      <h3>Chat + Audio — Approval Demo</h3>
+      <div class="small">(simple)</div>
     </header>
 
     <div class="row">
@@ -40,7 +38,7 @@
       <label>Room: <input id="room" value="main" /></label>
       <button id="connect">Connect</button>
       <button id="disconnect" disabled>Disconnect</button>
-      <button id="copyLink" title="Copy room link">Copy room link</button>
+      <button id="copyLink">Copy room link</button>
       <div style="flex:1"></div>
       <label class="small">Require approval</label>
       <input id="approvalToggle" type="checkbox" />
@@ -49,33 +47,29 @@
     <div class="main">
       <div class="left panel">
         <div id="chat"></div>
+
         <div style="display:flex;gap:8px;margin-top:10px">
           <input id="message" placeholder="Type message..." style="flex:1" />
           <button id="send" disabled>Send</button>
+          <button id="muteBtn" disabled>Mute</button>
+        </div>
+
+        <div id="audios" style="margin-top:12px">
+          <div class="meta">Remote audio streams will appear below:</div>
         </div>
       </div>
 
-      <aside style="width:280px">
+      <aside style="width:300px">
         <div class="panel">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="small">Participants</div>
-            <div id="hostLabel" class="small muted">—</div>
-          </div>
+          <div class="small">Participants</div>
           <div id="participants" class="participants"></div>
           <hr style="border:none;height:8px;opacity:0" />
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="small">Pending (host only)</div>
-            <div>
-              <button id="acceptAll" title="Accept all pending" style="display:none">Accept all</button>
-              <button id="refreshPending" title="Refresh pending" style="display:none">Refresh</button>
-            </div>
-          </div>
+          <div class="small">Pending (host only)</div>
           <div id="pendingList" class="pending"></div>
         </div>
       </aside>
     </div>
 
-    <!-- waiting overlay for pending users -->
     <div id="waiting" class="panel hidden" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);min-width:260px;text-align:center;z-index:40">
       <div class="small">Waiting for host approval...</div>
       <div style="margin-top:10px"><button id="leavePending">Leave</button></div>
@@ -83,8 +77,27 @@
   </div>
 
 <script>
-// Minimal client with approval support + small UI improvements
-let ws=null, myId=null, hostId=null;
+/*  Audio + signaling client (works with your existing FastAPI signaling server)
+    - Uses the same JSON messages your server already uses:
+      welcome (contains participants), participants, participant-joined,
+      and server forwards type 'offer', 'answer', 'ice-candidate' to target.
+    - Add TURN credentials to ICE_SERVERS for reliable worldwide connectivity.
+*/
+
+let ws = null;
+let myId = null;
+let hostId = null;
+let localStream = null;
+const pcs = {};           // peerId -> RTCPeerConnection
+const remoteEls = {};     // peerId -> audio element
+let muted = false;
+
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" }
+  // If you have a TURN server, replace above or add:
+  // { urls: "turn:YOUR_TURN_HOST:3478", username: "user", credential: "pass" }
+];
+
 const nameEl=document.getElementById('name');
 const roomEl=document.getElementById('room');
 const connectBtn=document.getElementById('connect');
@@ -97,199 +110,328 @@ const sendBtn=document.getElementById('send');
 const approvalToggle=document.getElementById('approvalToggle');
 const waitingBox=document.getElementById('waiting');
 const leavePending=document.getElementById('leavePending');
-const acceptAllBtn=document.getElementById('acceptAll');
-const refreshPendingBtn=document.getElementById('refreshPending');
+const muteBtn=document.getElementById('muteBtn');
+const audiosDiv=document.getElementById('audios');
 const copyLinkBtn=document.getElementById('copyLink');
-const hostLabel=document.getElementById('hostLabel');
 
-function esc(s){return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c));}
-function addChat(html){const d=document.createElement('div');d.className='msg';d.innerHTML=html;chatEl.appendChild(d);chatEl.scrollTop=chatEl.scrollHeight}
-function setHostUI(isHost){
-  // show host controls only for host
-  acceptAllBtn.style.display = isHost ? 'inline-block' : 'none';
-  refreshPendingBtn.style.display = isHost ? 'inline-block' : 'none';
-  // approval toggle editable only for host
-  approvalToggle.disabled = !isHost;
+function esc(s){ return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c)); }
+function addChat(html){ const d=document.createElement('div'); d.className='msg'; d.innerHTML=html; chatEl.appendChild(d); chatEl.scrollTop = chatEl.scrollHeight; }
+
+function safeSend(obj){
+  if(!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify(obj));
 }
-function renderParticipants(list){
-  participantsEl.innerHTML='';
-  (list||[]).forEach(p=>{
-    const row=document.createElement('div'); row.className='participant-row';
-    const left=document.createElement('div');
-    left.innerHTML=`<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
-    const right=document.createElement('div');
-    if(p.is_host) {
-      const badge=document.createElement('span'); badge.className='host-badge'; badge.textContent='HOST';
-      right.appendChild(badge);
+
+/* ---- Microphone management ---- */
+async function startLocalMic(){
+  if(localStream) return localStream;
+  try{
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    muted = false; muteBtn.textContent = 'Mute'; muteBtn.disabled = false;
+    return localStream;
+  }catch(e){
+    addChat('<div class="meta" style="color:crimson">Mic permission denied or error</div>');
+    throw e;
+  }
+}
+function setLocalMute(val){
+  muted = !!val;
+  if(localStream) localStream.getAudioTracks().forEach(t => t.enabled = !muted);
+  muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+}
+
+/* ---- WebRTC helpers ---- */
+function makePC(peerId){
+  if(pcs[peerId]) return pcs[peerId];
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+  // add local audio track(s)
+  if(localStream){
+    for(const t of localStream.getTracks()) pc.addTrack(t, localStream);
+  }
+
+  pc.onicecandidate = (ev) => {
+    if(ev.candidate){
+      safeSend({ type: 'ice-candidate', to: peerId, candidate: ev.candidate, from: myId });
     }
+  };
+
+  pc.ontrack = (ev) => {
+    // first stream -> create audio element
+    const stream = ev.streams && ev.streams[0];
+    if(!stream) return;
+    attachRemoteStream(peerId, stream);
+  };
+
+  pc.onconnectionstatechange = () => {
+    if(pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected'){
+      try{ pc.close(); }catch(e){}
+      delete pcs[peerId];
+      removeRemoteStream(peerId);
+    }
+  };
+
+  pcs[peerId] = pc;
+  return pc;
+}
+
+function attachRemoteStream(peerId, stream){
+  if(remoteEls[peerId]) {
+    remoteEls[peerId].srcObject = stream;
+    return;
+  }
+  const wrap = document.createElement('div'); wrap.className='audio-tile';
+  const label = document.createElement('div'); label.innerHTML = `<strong>${peerId}</strong>`;
+  const audio = document.createElement('audio'); audio.autoplay = true; audio.controls = true; audio.srcObject = stream;
+  wrap.appendChild(label); wrap.appendChild(audio);
+  audiosDiv.appendChild(wrap);
+  remoteEls[peerId] = audio;
+}
+
+function removeRemoteStream(peerId){
+  const el = remoteEls[peerId];
+  if(el && el.parentNode) el.parentNode.remove();
+  delete remoteEls[peerId];
+}
+
+/* ---- Offer / Answer flow ---- */
+async function createOffer(targetId){
+  if(!localStream) {
+    try{ await startLocalMic(); } catch(e){ return; }
+  }
+  if(pcs[targetId]) return; // already have pc
+  const pc = makePC(targetId);
+  try{
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    safeSend({ type:'offer', to: targetId, sdp: offer.sdp, sdpType: offer.type, from: myId });
+    addChat(`<div class="meta">Sent offer → ${targetId}</div>`);
+  }catch(e){
+    console.error('offer error', e);
+  }
+}
+
+async function handleOffer(msg){
+  const from = msg.from;
+  if(!from) return;
+  // ensure we have mic available to send audio back
+  if(!localStream){
+    try{ await startLocalMic(); }catch(e){}
+  }
+  const pc = makePC(from);
+  await pc.setRemoteDescription({ type:'offer', sdp: msg.sdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  safeSend({ type:'answer', to: from, sdp: answer.sdp, sdpType: answer.type, from: myId });
+  addChat(`<div class="meta">Answered offer from ${from}</div>`);
+}
+
+async function handleAnswer(msg){
+  const from = msg.from;
+  const pc = pcs[from];
+  if(!pc) return;
+  await pc.setRemoteDescription({ type:'answer', sdp: msg.sdp });
+  addChat(`<div class="meta">Received answer from ${from}</div>`);
+}
+
+async function handleIce(msg){
+  const from = msg.from;
+  const pc = pcs[from];
+  if(!pc) return;
+  try{
+    await pc.addIceCandidate(msg.candidate);
+  }catch(e){ console.warn('ICE add error', e); }
+}
+
+/* ---- Signaling and UI ---- */
+function renderParticipants(list){
+  participantsEl.innerHTML = '';
+  (list||[]).forEach(p=>{
+    const row = document.createElement('div'); row.className='participant-row';
+    const left = document.createElement('div'); left.innerHTML = `<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
+    const right = document.createElement('div');
+    if(p.is_host) { const hb = document.createElement('span'); hb.className='host-badge'; hb.textContent='HOST'; right.appendChild(hb); }
     row.appendChild(left); row.appendChild(right);
     participantsEl.appendChild(row);
   });
-  // update host label
-  const host = (list||[]).find(x=>x.is_host);
-  hostLabel.textContent = host ? `host: ${host.name}` : 'host: —';
 }
 function renderPending(list){
-  pendingEl.innerHTML='';
+  pendingEl.innerHTML = '';
   (list||[]).forEach(p=>{
-    const row=document.createElement('div');
-    row.className='participant-row';
+    const row = document.createElement('div'); row.className='participant-row';
     row.id = 'pending-'+p.id;
-    const left=document.createElement('div');
-    left.innerHTML=`<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
-    const right=document.createElement('div');
-    const acc=document.createElement('button'); acc.textContent='Accept'; acc.onclick=()=>{ sendAction('accept',p.id); row.remove(); };
-    const rej=document.createElement('button'); rej.textContent='Reject'; rej.onclick=()=>{ if(confirm('Reject '+p.name+'?')){ sendAction('reject',p.id); row.remove(); } };
+    const left = document.createElement('div'); left.innerHTML = `<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
+    const right = document.createElement('div');
+    const acc = document.createElement('button'); acc.textContent='Accept';
+    acc.onclick = ()=>{ safeSend({ type:'action', action:'accept', target: p.id }); row.remove(); };
+    const rej = document.createElement('button'); rej.textContent='Reject';
+    rej.onclick = ()=>{ if(confirm('Reject '+p.name+'?')){ safeSend({ type:'action', action:'reject', target: p.id }); row.remove(); } };
     right.appendChild(acc); right.appendChild(rej);
     row.appendChild(left); row.appendChild(right);
     pendingEl.appendChild(row);
   });
-  // show empty hint
-  if((list||[]).length===0){
-    const hint=document.createElement('div'); hint.className='meta muted'; hint.textContent='No pending requests';
-    pendingEl.appendChild(hint);
-  }
 }
-
-function sendAction(action,target,extra={}){ if(!ws) return; ws.send(JSON.stringify(Object.assign({type:'action',action,target},extra))) }
-
-connectBtn.onclick=()=>{
-  if(ws) return;
-  const name=nameEl.value||'Guest';
-  const room=roomEl.value||'main';
-  const proto=location.protocol==='https:'?'wss':'ws';
-  const url=`${proto}://${location.host}/ws/${encodeURIComponent(room)}`;
-  ws=new WebSocket(url);
-
-  ws.onopen=()=>{
-    ws.send(JSON.stringify({type:'join',name}));
-    connectBtn.disabled=true; disconnectBtn.disabled=false;
-    addChat('<div class="meta">Connecting…</div>');
-  };
-
-  ws.onmessage=e=>{ try{ const m=JSON.parse(e.data); handle(m); } catch(err){ console.error(err); } };
-
-  ws.onclose=()=>{
-    addChat('<div class="meta">Disconnected</div>');
-    cleanup();
-  };
-
-  ws.onerror=(err)=>{ console.error('ws error', err); addChat('<div class="meta" style="color:crimson">WebSocket error</div>'); };
-};
-
-disconnectBtn.onclick=()=>{ if(ws) ws.close(); cleanup(); }
-
-copyLinkBtn.onclick=()=>{
-  const room = roomEl.value || 'main';
-  const url = `${location.origin}${location.pathname}#room=${encodeURIComponent(room)}`;
-  navigator.clipboard?.writeText(url).then(()=>{ addChat('<div class="meta">Room link copied</div>'); }, ()=>{ alert(url); });
-};
-
-sendBtn.onclick=()=>{ const t=msgEl.value.trim(); if(!t||!ws) return; ws.send(JSON.stringify({type:'chat',text:t})); addChat(`<strong>[me]</strong> ${esc(t)}`); msgEl.value=''; }
-
-approvalToggle.onchange=()=>{
-  if(!ws){ approvalToggle.checked = !approvalToggle.checked; alert('Connect as host to change'); return; }
-  sendAction('set-approval', null, { value: approvalToggle.checked });
-};
-
-acceptAllBtn.onclick=()=>{
-  // accept all items currently in pending list
-  const items = pendingEl.querySelectorAll('[id^="pending-"]');
-  items.forEach(it=>{
-    const id = it.id.replace('pending-','');
-    sendAction('accept', id);
-    it.remove();
-  });
-};
-
-refreshPendingBtn.onclick=()=>{ sendAction('refresh-pending', null); };
-
-leavePending.onclick=()=>{ if(ws) ws.close(); cleanup(); };
 
 function handle(msg){
   switch(msg.type){
     case 'waiting':
       waitingBox.classList.remove('hidden');
-      addChat('<div class="meta">You are waiting for approval</div>');
-      sendBtn.disabled=true;
+      addChat('<div class="meta">Waiting for host approval...</div>');
+      sendBtn.disabled = true;
+      muteBtn.disabled = true;
       break;
+
     case 'welcome':
       waitingBox.classList.add('hidden');
       myId = msg.id;
       hostId = msg.host_id;
       addChat(`<div class="meta">Welcome — id: ${esc(msg.id)}</div>`);
-      // participants from server may not include host flag — ensure presence
-      // normalize participants to include is_host flag by checking host_id
-      const parts = (msg.participants||[]).map(p=>({ id: p.id, name: p.name, is_host: (p.id === msg.host_id) }));
+      // enrich participants with host flag
+      const parts = (msg.participants||[]).map(p => ({ id: p.id, name: p.name, is_host: (p.id === msg.host_id) }));
       renderParticipants(parts);
-      setHostUI(myId === msg.host_id);
-      sendBtn.disabled=false;
-      if(msg.room_meta) approvalToggle.checked = !!msg.room_meta.require_approval;
+      sendBtn.disabled = false;
+      // try to get mic permission early
+      startLocalMic().catch(()=>{});
+      // create offers to existing participants (we initiate to others)
+      for(const p of parts){
+        if(p.id !== myId) createOffer(p.id);
+      }
+      // host might need the pending list
       if(msg.pending) renderPending(msg.pending);
+      // room meta
+      if(msg.room_meta) approvalToggle.checked = !!msg.room_meta.require_approval;
       break;
+
     case 'participants':
-      // server sends array of approved participants (id, name)
-      const ps = (msg.participants||[]).map(p=>({ id: p.id, name: p.name, is_host: (p.id === hostId) }));
-      renderParticipants(ps);
+      // server sends array of approved participants (id,name)
+      const normalized = (msg.participants||[]).map(p=>({id:p.id, name:p.name, is_host: (p.id === hostId)}));
+      renderParticipants(normalized);
       break;
+
     case 'pending':
       renderPending(msg.pending || []);
       break;
+
     case 'join-request':
       addChat(`<div class="meta">Join request: ${esc(msg.participant.name)}</div>`);
-      // hosts will receive 'pending' update soon; no further action
       break;
+
     case 'participant-joined':
       addChat(`<div class="meta">${esc(msg.name)} joined</div>`);
+      // existing approved peers should create offer to new participant
+      if(msg.id && msg.id !== myId) {
+        createOffer(msg.id);
+      }
       break;
+
     case 'participant-left':
       addChat(`<div class="meta">${esc(msg.name)} left</div>`);
+      // tear down peer connection if any
+      if(pcs[msg.id]){ try{ pcs[msg.id].close(); }catch(e){} delete pcs[msg.id]; }
+      if(remoteEls[msg.id]) removeRemoteStream(msg.id);
       break;
+
     case 'chat':
       addChat(`<strong>${esc(msg.name)}</strong> ${esc(msg.text)}`);
       break;
+
+    case 'offer':
+      handleOffer(msg).catch(e=>console.error(e));
+      break;
+    case 'answer':
+      handleAnswer(msg).catch(e=>console.error(e));
+      break;
+    case 'ice-candidate':
+      handleIce(msg);
+      break;
+
     case 'room-meta':
       if(msg.meta) approvalToggle.checked = !!msg.meta.require_approval;
       break;
+
     case 'command':
-      if(msg.cmd === 'you-are-rejected'){
-        addChat('<div class="meta" style="color:crimson">You were rejected</div>');
-        if(ws) ws.close();
-        cleanup();
-      }
+      if(msg.cmd === 'you-are-rejected'){ addChat('<div class="meta" style="color:crimson">You were rejected</div>'); if(ws) ws.close(); cleanup(); }
       break;
+
     case 'error':
       addChat(`<div class="meta" style="color:crimson">Error: ${esc(msg.message)}</div>`);
       break;
+
     default:
       console.log('unknown message', msg);
   }
 }
 
+/* ---- WebSocket wiring ---- */
+connectBtn.onclick = () => {
+  if(ws) return;
+  const name = (nameEl.value || 'Guest').trim();
+  const room = (roomEl.value || 'main').trim();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/ws/${encodeURIComponent(room)}`;
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    safeSend({ type: 'join', name });
+    connectBtn.disabled = true; disconnectBtn.disabled = false;
+    addChat('<div class="meta">Connecting…</div>');
+  };
+
+  ws.onmessage = (evt) => {
+    try{ const m = JSON.parse(evt.data); handle(m); } catch(e) { console.error(e); }
+  };
+
+  ws.onclose = () => {
+    addChat('<div class="meta">Disconnected</div>');
+    cleanup();
+  };
+
+  ws.onerror = (e) => { console.error('ws error', e); addChat('<div class="meta" style="color:crimson">WebSocket error</div>'); };
+};
+
+disconnectBtn.onclick = () => { if(ws) ws.close(); cleanup(); };
+sendBtn.onclick = () => { const t = msgEl.value.trim(); if(!t || !ws) return; safeSend({ type:'chat', text: t }); addChat(`<strong>[me]</strong> ${esc(t)}`); msgEl.value=''; };
+approvalToggle.onchange = ()=>{ if(!ws) { approvalToggle.checked = !approvalToggle.checked; alert('Connect as host to change'); return; } safeSend({ type:'action', action:'set-approval', value: approvalToggle.checked }); };
+leavePending.onclick = ()=>{ if(ws) ws.close(); cleanup(); };
+
+muteBtn.onclick = ()=>{
+  setLocalMute(!muted);
+};
+
+copyLinkBtn.onclick = ()=>{
+  const room = roomEl.value || 'main';
+  const url = `${location.origin}${location.pathname}#room=${encodeURIComponent(room)}`;
+  navigator.clipboard?.writeText(url).then(()=> addChat('<div class="meta">Room link copied</div>'), ()=> alert(url));
+};
+
+/* cleanup */
 function cleanup(){
   try{ if(ws){ ws.close(); } } catch(e){}
   ws = null;
   myId = null;
   hostId = null;
-  connectBtn.disabled = false;
-  disconnectBtn.disabled = true;
   sendBtn.disabled = true;
+  muteBtn.disabled = true;
   waitingBox.classList.add('hidden');
+  // stop mic
+  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream = null; }
+  // close pcs
+  for(const k of Object.keys(pcs)){ try{ pcs[k].close(); }catch(e){} delete pcs[k]; }
+  // remove remote audio els
+  for(const k of Object.keys(remoteEls)){ removeRemoteStream(k); }
   participantsEl.innerHTML = '';
   pendingEl.innerHTML = '';
-  setHostUI(false);
 }
 
-// Enter to send
-msgEl.addEventListener('keydown', e => { if(e.key === 'Enter') sendBtn.click(); });
+/* Enter to send */
+msgEl.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') sendBtn.click(); });
 
-// on load: if URL has #room=... prefill room
-(function prefillRoomFromHash(){
+/* On load: prefill room from hash */
+(function(){
   try{
     const h = location.hash || '';
     if(h.startsWith('#room=')){
-      const r = decodeURIComponent(h.slice(6));
-      document.getElementById('room').value = r;
+      document.getElementById('room').value = decodeURIComponent(h.slice(6));
     } else {
       const params = new URLSearchParams(location.search);
       if(params.get('room')) document.getElementById('room').value = params.get('room');
