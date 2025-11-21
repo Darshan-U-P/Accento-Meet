@@ -38,6 +38,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     # We'll store is_approved flag; default True for now until we check room meta
     rooms[room_id][client_id] = {"ws": websocket, "displayName": "", "is_host": False, "is_approved": True}
 
+    print(f"[CONNECT] room={room_id} assigned_id={client_id}")
+
     try:
         # Receive initial join
         text = await websocket.receive_text()
@@ -46,10 +48,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         except Exception:
             message = {}
 
+        print(f"[WS RX] room={room_id} id={client_id} initial_msg={message.get('type')}")
+
         if message.get("type") != "join":
             await safe_send(websocket, {"type": "error", "message": "Expected initial join message with type='join' and displayName"})
             await websocket.close()
             del rooms[room_id][client_id]
+            print(f"[DISCONNECT] room={room_id} id={client_id} missing-join")
             return
 
         # Set display name
@@ -64,12 +69,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         if not existing_hosts:
             rooms[room_id][client_id]["is_host"] = True
             rooms[room_id][client_id]["is_approved"] = True
+            print(f"[HOST] room={room_id} id={client_id} became_host")
         else:
             # if approval required and this joiner is not the host, mark as pending
             if require_approval:
                 rooms[room_id][client_id]["is_approved"] = False
+                print(f"[PENDING] room={room_id} id={client_id} waiting_for_host")
             else:
                 rooms[room_id][client_id]["is_approved"] = True
+                print(f"[APPROVED] room={room_id} id={client_id} auto_approved")
 
         # If the participant is not approved, notify host(s) and put client in waiting state
         if not rooms[room_id][client_id]["is_approved"]:
@@ -82,6 +90,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             for hid in host_ids:
                 try:
                     await safe_send(rooms[room_id][hid]["ws"], join_req)
+                    print(f"[JOIN-REQ] room={room_id} from={client_id} -> host={hid}")
                 except Exception:
                     pass
             # now just loop waiting for host to accept/reject (host's action handler will set is_approved)
@@ -91,6 +100,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             host_id = next((cid for cid, rec in rooms[room_id].items() if rec.get("is_host")), None)
             # send welcome to this client (only approved participants included)
             await safe_send(websocket, {"type": "welcome", "client_id": client_id, "participants": participants, "host_id": host_id})
+            print(f"[WELCOME] room={room_id} to={client_id} participants_count={len(participants)}")
             # notify other approved participants that someone joined
             join_msg = {"type": "participant-joined", "participant": _make_participant_info(client_id, rooms[room_id][client_id])}
             for cid, rec in list(rooms[room_id].items()):
@@ -99,6 +109,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 # only notify approved participants
                 if rec.get("is_approved"):
                     await safe_send(rec["ws"], join_msg)
+
+            # Tell all existing approved participants to start WebRTC offer to this new member
+            offer_trigger = {"type": "need-offer", "target": client_id}
+            for cid, rec in list(rooms[room_id].items()):
+                if cid != client_id and rec.get("is_approved"):
+                    try:
+                        await safe_send(rec["ws"], offer_trigger)
+                        print(f"[NEED-OFFER] room={room_id} ask={cid} -> create offer for {client_id}")
+                    except Exception:
+                        pass
 
         # main loop
         while True:
@@ -110,6 +130,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
             message.setdefault("from", client_id)
             mtype = message.get("type")
+            print(f"[WS RX] room={room_id} from={client_id} type={mtype} to={message.get('to')}")
 
             # Signaling: offer/answer/ice directed by 'to'
             if mtype in ("offer", "answer", "ice-candidate"):
@@ -118,10 +139,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     # only forward if target is approved (or allow forwarded for pending? choose to allow only approved)
                     if rooms[room_id][target].get("is_approved", False):
                         await safe_send(rooms[room_id][target]["ws"], message)
+                        print(f"[FORWARD] room={room_id} {mtype} from={client_id} -> {target}")
                     else:
                         await safe_send(websocket, {"type": "error", "message": f"target {target} not approved yet"})
+                        print(f"[BLOCK] room={room_id} cannot forward {mtype} to {target} not approved")
                 else:
                     await safe_send(websocket, {"type": "error", "message": f"target {target} not in room"})
+                    print(f"[ERROR] room={room_id} {mtype} target missing: {target}")
                 continue
 
             # Chat: broadcast to approved participants only
@@ -147,12 +171,14 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if action in ("mute", "kick", "make-host", "lock-room", "unlock-room", "accept", "reject", "set-approval"):
                     if not actor_rec.get("is_host", False):
                         await safe_send(websocket, {"type": "error", "message": "Only host may perform this action"})
+                        print(f"[DENY] room={room_id} actor={actor} attempted privileged action {action}")
                         continue
 
                 # Accept pending participant
                 if action == "accept" and target:
                     if target in rooms[room_id] and not rooms[room_id][target].get("is_approved", False):
                         rooms[room_id][target]["is_approved"] = True
+                        print(f"[ACCEPT] room={room_id} host={actor} accepted={target}")
                         # send welcome to the newly approved participant
                         participants = [_make_participant_info(cid, rec) for cid, rec in rooms[room_id].items() if rec.get("is_approved")]
                         host_id = next((cid for cid, rec in rooms[room_id].items() if rec.get("is_host")), None)
@@ -168,6 +194,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         for cid, rec in list(rooms[room_id].items()):
                             if rec.get("is_approved"):
                                 await safe_send(rec["ws"], {"type": "participants-update", "participants": participants, "host_id": host_id})
+
+                        # Ask existing approved peers to create offers to the newly approved participant
+                        offer_trigger = {"type": "need-offer", "target": target}
+                        for cid, rec in list(rooms[room_id].items()):
+                            if cid != target and rec.get("is_approved"):
+                                try:
+                                    await safe_send(rec["ws"], offer_trigger)
+                                    print(f"[NEED-OFFER] room={room_id} ask={cid} -> create offer for {target}")
+                                except Exception:
+                                    pass
                     continue
 
                 # Reject pending participant
@@ -176,6 +212,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         try:
                             await safe_send(rooms[room_id][target]["ws"], {"type": "command", "cmd": "you-are-rejected", "from": actor})
                             await rooms[room_id][target]["ws"].close()
+                            print(f"[REJECT] room={room_id} host={actor} rejected={target}")
                         except Exception:
                             pass
                     continue
@@ -188,6 +225,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         for cid, rec in list(rooms[room_id].items()):
                             if rec.get("is_approved"):
                                 await safe_send(rec["ws"], notify)
+                        print(f"[MUTE] room={room_id} host={actor} -> mute {target}")
                     continue
 
                 # Kick (close connection)
@@ -196,6 +234,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         try:
                             await safe_send(rooms[room_id][target]["ws"], {"type": "command", "cmd": "you-are-kicked", "from": actor})
                             await rooms[room_id][target]["ws"].close()
+                            print(f"[KICK] room={room_id} host={actor} kicked={target}")
                         except Exception:
                             pass
                     continue
@@ -211,6 +250,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         for cid, rec in list(rooms[room_id].items()):
                             if rec.get("is_approved"):
                                 await safe_send(rec["ws"], {"type": "participants-update", "participants": participants, "host_id": host_id})
+                        print(f"[MAKE-HOST] room={room_id} new_host={target}")
                     continue
 
                 # lock/unlock room
@@ -233,10 +273,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     for cid, rec in list(rooms[room_id].items()):
                         if rec.get("is_approved"):
                             await safe_send(rec["ws"], {"type": "room-meta", "meta": rooms[room_id].get("_meta", {})})
+                    print(f"[META] room={room_id} require_approval set to {val} by {actor}")
                     continue
 
                 # unknown privileged action
                 await safe_send(websocket, {"type": "error", "message": f"Unknown action {action}"})
+                print(f"[ERROR] room={room_id} unknown action {action} by {actor}")
                 continue
 
             # update-name
@@ -258,6 +300,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await safe_send(rec["ws"], message)
 
     except WebSocketDisconnect:
+        print(f"[DISCONNECT] room={room_id} id={client_id}")
         # cleanup on disconnect
         if room_id in rooms and client_id in rooms[room_id]:
             left_display = rooms[room_id][client_id].get("displayName", client_id)
@@ -275,6 +318,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         break
                 if first_cid:
                     rooms[room_id][first_cid]["is_host"] = True
+                    print(f"[PROMOTE] room={room_id} new_host={first_cid}")
 
             # notify remaining approved participants
             participants = [_make_participant_info(cid, rec) for cid, rec in rooms[room_id].items() if rec.get("is_approved")]
