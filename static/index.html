@@ -2,608 +2,173 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Mini Meet — Device selection + Host Approval</title>
+  <title>Simple Chat (Mini Meet)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body{font-family:Arial,Helvetica,sans-serif;background:#0b1220;color:#e6eef6;margin:0;padding:14px}
-    .app{max-width:1180px;margin:0 auto}
-    .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
-    .card{background:#0b1220;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
-    select,input[type=text]{background:transparent;border:1px solid rgba(255,255,255,0.04);color:inherit;padding:8px;border-radius:8px}
-    button{background:#4f46e5;color:white;padding:8px 12px;border-radius:8px;border:none;cursor:pointer}
-    .main{display:grid;grid-template-columns:1fr 360px;gap:12px}
-    .stage{background:#081022;padding:12px;border-radius:12px;position:relative;min-height:420px}
-    #videos{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
-    .tile{position:relative;border-radius:8px;background:#000;height:150px;overflow:hidden;border:1px solid rgba(255,255,255,0.02)}
-    video{width:100%;height:100%;object-fit:cover;display:block}
-    .label{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,0.5);padding:4px 8px;border-radius:999px;font-size:12px}
-    .small{font-size:12px;color:#9aa4b2}
-    .overlay{position:absolute;inset:0;background:rgba(2,6,23,0.85);display:flex;align-items:center;justify-content:center;flex-direction:column}
+    body{font-family:Arial,Helvetica,sans-serif;background:#f6f7fb;color:#111;margin:0;padding:18px}
+    .app{max-width:900px;margin:0 auto}
+    header{display:flex;align-items:center;gap:12px}
+    input,button,select,textarea{padding:8px;border-radius:6px;border:1px solid #ddd}
+    button{background:#3578f6;color:#fff;border:none;cursor:pointer}
+    .layout{display:flex;gap:14px;margin-top:12px}
+    .left{flex:1}
+    .right{width:260px}
+    #chat{height:400px;overflow:auto;border:1px solid #eee;padding:10px;background:#fff;border-radius:6px}
+    .msg{margin-bottom:8px}
+    .meta{font-size:12px;color:#666}
+    .participant{padding:6px;border-radius:6px;margin-bottom:6px;background:#fff;border:1px solid #eee}
   </style>
 </head>
 <body>
   <div class="app">
-    <h2>Mini Meet — Demo</h2>
+    <header>
+      <h2>Simple Chat</h2>
+    </header>
 
-    <div class="controls card">
-      <label> Name: <input id="displayName" value="Guest" /></label>
-      <label> Room: <input id="roomId" value="testroom" /></label>
-      <button id="joinBtn">Join Room</button>
-      <button id="leaveBtn" disabled>Leave</button>
-
-      <label> Camera:
-        <select id="cameraSelect"></select>
-      </label>
-      <label> Microphone:
-        <select id="micSelect"></select>
-      </label>
-
-      <div style="flex:1"></div>
-
-      <button id="muteBtn" disabled>Mute</button>
-      <button id="cameraBtn" disabled>Stop Camera</button>
-      <button id="shareBtn" disabled>Share Screen</button>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <label>Name: <input id="name" type="text" value="Guest" /></label>
+      <label>Room: <input id="room" type="text" value="main" /></label>
+      <button id="connect">Connect</button>
+      <button id="disconnect" disabled>Disconnect</button>
     </div>
 
-    <div class="main">
-      <section class="stage">
-        <div id="videos"></div>
-        <div class="small">Your id: <span id="myId">—</span> • <span id="roleLabel">—</span></div>
+    <div class="layout">
+      <div class="left">
+        <div id="chat"></div>
 
-        <div id="waitingOverlay" class="overlay" style="display:none">
-          <div class="card">
-            <h3>Waiting for host approval</h3>
-            <div class="small">Host will accept or reject your request to join.</div>
-            <div style="margin-top:12px"><button id="leaveWhileWaiting">Leave</button></div>
-          </div>
-        </div>
-      </section>
-
-      <aside class="card" style="padding:12px">
-        <h3>Participants</h3>
-        <div id="participantsList"></div>
-
-        <div id="pendingSection" style="margin-top:12px; display:none">
-          <h4>Pending requests</h4>
-          <div id="pendingList"></div>
-        </div>
-
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
-          <div class="small">Require approval</div>
-          <label><input id="approvalToggle" type="checkbox" /> <span class="small">Host-only</span></label>
-        </div>
-
-        <h4 style="margin-top:12px">Chat</h4>
-        <div id="chatLog" style="height:180px;overflow:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px"></div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <input id="chatInput" placeholder="Message..." style="flex:1" />
-          <button id="sendChat" disabled>Send</button>
+          <input id="message" placeholder="Type message..." style="flex:1" />
+          <button id="send" disabled>Send</button>
         </div>
+      </div>
+
+      <aside class="right">
+        <h4>Participants</h4>
+        <div id="participants"></div>
       </aside>
     </div>
   </div>
 
 <script>
-/* Client side signaling + WebRTC with device selection fixes */
-
-const displayNameInput = document.getElementById('displayName');
-const roomInput = document.getElementById('roomId');
-const joinBtn = document.getElementById('joinBtn');
-const leaveBtn = document.getElementById('leaveBtn');
-const myIdLabel = document.getElementById('myId');
-const roleLabel = document.getElementById('roleLabel');
-const videos = document.getElementById('videos');
-const participantsList = document.getElementById('participantsList');
-const chatLog = document.getElementById('chatLog');
-const chatInput = document.getElementById('chatInput');
-const sendChat = document.getElementById('sendChat');
-
-const muteBtn = document.getElementById('muteBtn');
-const cameraBtn = document.getElementById('cameraBtn');
-const shareBtn = document.getElementById('shareBtn');
-
-const cameraSelect = document.getElementById('cameraSelect');
-const micSelect = document.getElementById('micSelect');
-const waitingOverlay = document.getElementById('waitingOverlay');
-const leaveWhileWaiting = document.getElementById('leaveWhileWaiting');
-const pendingSection = document.getElementById('pendingSection');
-const pendingList = document.getElementById('pendingList');
-const approvalToggle = document.getElementById('approvalToggle');
-
 let ws = null;
 let myId = null;
-let hostId = null;
-let localStream = null;
-let pcs = {};       // peerId -> RTCPeerConnection
-let videoEls = {};  // peerId -> video element
-let senders = {};   // peerId -> {videoSender, audioSender}
-let isMuted = false;
-let camOn = true;
-let isWaiting = false;
 
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  // Add TURN server here if needed for NAT traversal
-];
+const nameInput = document.getElementById('name');
+const roomInput = document.getElementById('room');
+const connectBtn = document.getElementById('connect');
+const disconnectBtn = document.getElementById('disconnect');
+const chatDiv = document.getElementById('chat');
+const participantsDiv = document.getElementById('participants');
+const msgInput = document.getElementById('message');
+const sendBtn = document.getElementById('send');
 
-// simple logger into chat log
-function log(msg) {
-  const d = document.createElement('div'); d.textContent = msg; chatLog.appendChild(d); chatLog.scrollTop = chatLog.scrollHeight;
-}
-function logSys(msg){ log(`[system] ${msg}`); }
-
-/* populate devices - only updates dropdowns, does NOT auto-apply */
-async function enumerateAndPopulateDevices() {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const cams = devices.filter(d => d.kind === 'videoinput');
-    const mics = devices.filter(d => d.kind === 'audioinput');
-
-    // remember currently selected ids if present
-    const prevCam = cameraSelect.value;
-    const prevMic = micSelect.value;
-
-    cameraSelect.innerHTML = '';
-    cams.forEach((c, idx) => {
-      const opt = document.createElement('option');
-      opt.value = c.deviceId;
-      // show friendly label when possible, fallback to index
-      opt.textContent = c.label || `Camera ${idx+1}`;
-      cameraSelect.appendChild(opt);
-    });
-
-    micSelect.innerHTML = '';
-    mics.forEach((m, idx) => {
-      const opt = document.createElement('option');
-      opt.value = m.deviceId;
-      opt.textContent = m.label || `Mic ${idx+1}`;
-      micSelect.appendChild(opt);
-    });
-
-    // restore previous selection if still present
-    if (prevCam && Array.from(cameraSelect.options).some(o => o.value === prevCam)) {
-      cameraSelect.value = prevCam;
-    } else if (cameraSelect.options.length) {
-      // pick the first device by default (do not auto-apply to media stream here)
-      cameraSelect.selectedIndex = 0;
-    }
-
-    if (prevMic && Array.from(micSelect.options).some(o => o.value === prevMic)) {
-      micSelect.value = prevMic;
-    } else if (micSelect.options.length) {
-      micSelect.selectedIndex = 0;
-    }
-  } catch (e) {
-    console.warn('enumerateDevices failed', e);
-  }
-}
-
-// Listen to devicechange but DO NOT automatically call getUserMedia or switch streams.
-// Only refresh lists and preserve current selection.
-if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-  navigator.mediaDevices.addEventListener('devicechange', async () => {
-    console.log('devicechange event — refreshing device list (no auto-switch)');
-    const previousCam = cameraSelect.value;
-    const previousMic = micSelect.value;
-    await enumerateAndPopulateDevices();
-    // restore previous selection if still present
-    if (previousCam && Array.from(cameraSelect.options).some(o => o.value === previousCam)) {
-      cameraSelect.value = previousCam;
-    }
-    if (previousMic && Array.from(micSelect.options).some(o => o.value === previousMic)) {
-      micSelect.value = previousMic;
-    }
-    // do NOT call applySelectedDevices() automatically
-  });
-}
-
-/* Use the selected devices explicitly (call this on join or when user changes selects) */
-async function applySelectedDevices() {
-  const camId = cameraSelect.value;
-  const micId = micSelect.value;
-  const constraints = {
-    video: camId ? { deviceId: { exact: camId } } : { facingMode: 'user' },
-    audio: micId ? { deviceId: { exact: micId } } : true
-  };
-
-  if (localStream) {
-    localStream.getTracks().forEach(t => t.stop());
-  }
-
-  try {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia(constraints);
-    } catch (err) {
-      console.warn('getUserMedia with constraints failed, trying default constraints', constraints, err);
-      // fallback to default device selection
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    }
-
-    addOrReplaceLocalTile(localStream);
-
-    // replace tracks for existing peers
-    for (const peerId of Object.keys(senders)) {
-      const videoTrack = localStream.getVideoTracks()[0];
-      const audioTrack = localStream.getAudioTracks()[0];
-      if (senders[peerId].videoSender && videoTrack) {
-        try { await senders[peerId].videoSender.replaceTrack(videoTrack); } catch(e){ console.warn('replace video failed', e); }
-      }
-      if (senders[peerId].audioSender && audioTrack) {
-        try { await senders[peerId].audioSender.replaceTrack(audioTrack); } catch(e){ console.warn('replace audio failed', e); }
-      }
-    }
-
-    muteBtn.disabled = cameraBtn.disabled = shareBtn.disabled = sendChat.disabled = false;
-  } catch (e) {
-    alert('Cannot access camera/microphone. Check permissions or if another app is using the camera.');
-    console.error('applySelectedDevices failed', e);
-  }
-}
-
-/* UI helpers */
-function setRoleLabel() {
-  if (!myId) { roleLabel.textContent = '—'; return; }
-  roleLabel.textContent = (myId === hostId) ? 'Host' : 'Participant';
-  pendingSection.style.display = (myId === hostId) ? 'block' : 'none';
+function appendMessage(html) {
+  const d = document.createElement('div');
+  d.className = 'msg';
+  d.innerHTML = html;
+  chatDiv.appendChild(d);
+  chatDiv.scrollTop = chatDiv.scrollHeight;
 }
 
 function renderParticipants(list) {
-  participantsList.innerHTML = '';
-  (list||[]).forEach(p => {
-    const el = document.createElement('div'); el.className = 'participant';
-    el.innerHTML = `<strong>${escapeHtml(p.displayName)}</strong> <div class="small">${p.id}</div>`;
-    participantsList.appendChild(el);
+  participantsDiv.innerHTML = '';
+  (list || []).forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'participant';
+    el.innerHTML = `<strong>${escapeHtml(p.name)}</strong><div class="meta">${p.id}</div>`;
+    participantsDiv.appendChild(el);
   });
 }
 
-/* tiles */
-function addOrReplaceLocalTile(stream) {
-  const id = 'local';
-  if (!videoEls[id]) {
-    const tile = document.createElement('div'); tile.className='tile'; tile.id=`tile-${id}`;
-    const v = document.createElement('video'); v.autoplay=true; v.muted=true; v.playsInline=true; v.id=`video-${id}`;
-    tile.appendChild(v);
-    const label = document.createElement('div'); label.className='label'; label.textContent='You';
-    tile.appendChild(label);
-    videos.prepend(tile);
-    videoEls[id] = v;
-  }
-  videoEls[id].srcObject = stream;
-}
+function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-function addRemoteTile(peerId, stream) {
-  if (videoEls[peerId]) {
-    videoEls[peerId].srcObject = stream;
-    return;
-  }
-  const tile = document.createElement('div'); tile.className='tile'; tile.id=`tile-${peerId}`;
-  const v = document.createElement('video'); v.autoplay=true; v.playsInline=true; v.id=`video-${peerId}`; v.controls=false;
-  tile.appendChild(v);
-  const label = document.createElement('div'); label.className='label'; label.textContent = peerId;
-  tile.appendChild(label);
-  videos.appendChild(tile);
-  videoEls[peerId] = v;
-  v.srcObject = stream;
-}
-
-function removeRemoteTile(peerId) {
-  const el = document.getElementById(`tile-${peerId}`);
-  if (el) el.remove();
-  if (videoEls[peerId]) delete videoEls[peerId];
-}
-
-/* Signaling wrapper with logs */
-function sendWS(payload) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  console.log('>>> WS send', payload);
-  ws.send(JSON.stringify(payload));
-}
-
-/* handle incoming signals */
-async function handleSignal(msg) {
-  console.log('<<< WS recv', msg);
-  switch(msg.type) {
-    case 'waiting':
-      isWaiting = true;
-      waitingOverlay.style.display = 'flex';
-      joinBtn.disabled = true;
-      leaveBtn.disabled = false;
-      logSys('Waiting for host approval...');
-      break;
-
-    case 'join-request':
-      // host: show pending UI
-      const p = msg.participant;
-      const wrapper = document.createElement('div');
-      wrapper.id = `pending-${p.id}`;
-      wrapper.innerHTML = `<div><strong>${escapeHtml(p.displayName)}</strong> <div class="small">${p.id}</div></div>`;
-      const accept = document.createElement('button'); accept.textContent='Accept'; accept.onclick = () => { sendWS({type:'action', action:'accept', target:p.id}); wrapper.remove(); };
-      const reject = document.createElement('button'); reject.textContent='Reject'; reject.onclick = () => { sendWS({type:'action', action:'reject', target:p.id}); wrapper.remove(); };
-      wrapper.appendChild(accept); wrapper.appendChild(reject);
-      pendingList.appendChild(wrapper);
-      logSys(`Join request: ${p.displayName}`);
-      break;
-
-    case 'welcome':
-      isWaiting = false;
-      waitingOverlay.style.display = 'none';
-      myId = msg.client_id;
-      hostId = msg.host_id;
-      myIdLabel.textContent = myId;
-      setRoleLabel();
-      renderParticipants(msg.participants || []);
-
-      // Create offers to existing participants (except self)
-      for (const p of msg.participants || []) {
-        if (p.id !== myId) {
-          console.log('welcome -> createOffer for', p.id);
-          await createOffer(p.id);
-        }
-      }
-      break;
-
-    case 'participants-update':
-      hostId = msg.host_id;
-      setRoleLabel();
-      renderParticipants(msg.participants || []);
-      (msg.participants||[]).forEach(p => {
-        const el = document.getElementById(`pending-${p.id}`); if (el) el.remove();
-      });
-      break;
-
-    case 'participant-joined':
-      logSys(`${msg.participant.displayName} joined`);
-      removeRemoteTile(msg.participant.id);
-      break;
-
-    case 'participant-left':
-      logSys(`${msg.displayName} left`);
-      removeRemoteTile(msg.id);
-      break;
-
-    case 'need-offer':
-      console.log('need-offer received, create offer to', msg.target);
-      if (msg.target && msg.target !== myId) {
-        await createOffer(msg.target);
-      }
-      break;
-
-    case 'offer':
-      if (msg.to && msg.to !== myId) return;
-      await handleOffer(msg);
-      break;
-
-    case 'answer':
-      if (msg.to && msg.to !== myId) return;
-      await handleAnswer(msg);
-      break;
-
-    case 'ice-candidate':
-      if (msg.to && msg.to !== myId) return;
-      await handleRemoteICE(msg);
-      break;
-
-    case 'chat':
-      log(`[${msg.from}] ${msg.text}`);
-      break;
-
-    case 'command':
-      if (msg.cmd === 'force-mute') {
-        if (localStream) {
-          localStream.getAudioTracks().forEach(t => t.enabled = false);
-          isMuted = true; muteBtn.textContent = 'Unmute';
-        }
-        logSys(`Asked to mute by ${msg.from || 'host'}`);
-      } else if (msg.cmd === 'you-are-kicked') {
-        logSys('You were kicked by host.');
-        if (ws) ws.close();
-        cleanupAll();
-      } else if (msg.cmd === 'you-are-rejected') {
-        logSys('Join request rejected by host.');
-        if (ws) ws.close();
-        cleanupAll();
-      }
-      break;
-
-    case 'room-meta':
-      approvalToggle.checked = !!(msg.meta && msg.meta.require_approval);
-      break;
-
-    case 'error':
-      console.warn('Server error:', msg.message);
-      break;
-
-    default:
-      console.log('Unknown message type', msg);
-  }
-}
-
-/* WebRTC functions */
-function makePeerConnection(peerId) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  pcs[peerId] = pc;
-
-  // add local tracks
-  if (localStream) {
-    senders[peerId] = {};
-    for (const t of localStream.getTracks()) {
-      const sender = pc.addTrack(t, localStream);
-      if (t.kind === 'video') senders[peerId].videoSender = sender;
-      if (t.kind === 'audio') senders[peerId].audioSender = sender;
-    }
-  }
-
-  pc.onicecandidate = ev => {
-    if (ev.candidate) {
-      console.log('onicecandidate ->', peerId, ev.candidate);
-      sendWS({ type: 'ice-candidate', to: peerId, candidate: ev.candidate, from: myId });
-    }
-  };
-
-  pc.ontrack = ev => {
-    console.log('pc.ontrack', peerId, ev.streams);
-    addRemoteTile(peerId, ev.streams[0]);
-  };
-
-  pc.onconnectionstatechange = () => {
-    console.log('pc.connectionState', peerId, pc.connectionState, 'iceState', pc.iceConnectionState);
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-      try { pc.close(); } catch(e){}
-      delete pcs[peerId];
-      removeRemoteTile(peerId);
-    }
-  };
-
-  return pc;
-}
-
-async function createOffer(peerId) {
-  if (!localStream) await applySelectedDevices();
-  if (!myId) return;
-  if (!peerId) return;
-  if (pcs[peerId]) {
-    console.log('pc exists for', peerId);
-    return;
-  }
-  console.log('createOffer ->', peerId);
-  const pc = makePeerConnection(peerId);
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  sendWS({ type: 'offer', to: peerId, sdp: offer.sdp, sdpType: offer.type, from: myId });
-}
-
-async function handleOffer(msg) {
-  const from = msg.from;
-  if (!from) return;
-  console.log('handleOffer from', from);
-  if (!pcs[from]) makePeerConnection(from);
-  const pc = pcs[from];
-  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  sendWS({ type: 'answer', to: from, sdp: answer.sdp, sdpType: answer.type, from: myId });
-}
-
-async function handleAnswer(msg) {
-  const from = msg.from;
-  if (!from) return;
-  console.log('handleAnswer from', from);
-  const pc = pcs[from];
-  if (!pc) return;
-  await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
-}
-
-async function handleRemoteICE(msg) {
-  const from = msg.from;
-  const pc = pcs[from];
-  if (!pc) {
-    console.warn('No pc for incoming ICE from', from);
-    return;
-  }
-  try {
-    await pc.addIceCandidate(msg.candidate);
-    console.log('added ice candidate from', from);
-  } catch (e) {
-    console.warn('ICE add error', e);
-  }
-}
-
-/* actions */
-function sendAction(action, target, extra={}) {
-  const payload = { type: 'action', action, target, ...extra };
-  sendWS(payload);
-}
-
-/* UI actions */
-joinBtn.onclick = async () => {
+connectBtn.onclick = () => {
   if (ws) return;
-  await enumerateAndPopulateDevices();
-  const name = displayNameInput.value.trim() || 'Guest';
-  const room = roomInput.value.trim() || 'testroom';
-  const protocol = (location.protocol === 'https:') ? 'wss' : 'ws';
-  const url = `${protocol}://${location.host}/ws/${encodeURIComponent(room)}`;
+  const name = nameInput.value.trim() || 'Guest';
+  const room = roomInput.value.trim() || 'main';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/ws/${encodeURIComponent(room)}`;
   ws = new WebSocket(url);
 
   ws.onopen = () => {
-    sendWS({ type: 'join', displayName: name });
-    joinBtn.disabled = true; leaveBtn.disabled = false;
-    console.log('WS connected');
+    // send join message
+    ws.send(JSON.stringify({ type: 'join', name }));
+    appendMessage('<div class="meta">Connected — joining...</div>');
+    connectBtn.disabled = true;
+    disconnectBtn.disabled = false;
   };
 
-  ws.onmessage = evt => { try { const msg = JSON.parse(evt.data); handleSignal(msg); } catch(e){ console.error(e); } };
-  ws.onclose = () => { cleanupAll(); };
-  ws.onerror = e => console.error('ws error', e);
-
-  await applySelectedDevices();
-};
-
-leaveBtn.onclick = () => { if (ws) ws.close(); cleanupAll(); };
-leaveWhileWaiting.onclick = () => { if (ws) ws.close(); cleanupAll(); };
-
-approvalToggle.onchange = () => {
-  if (myId !== hostId) { approvalToggle.checked = !approvalToggle.checked; alert('Only host may toggle approval'); return; }
-  sendAction('set-approval', null, { value: approvalToggle.checked });
-};
-
-muteBtn.onclick = () => { if (!localStream) return; isMuted = !isMuted; localStream.getAudioTracks().forEach(t=>t.enabled=!isMuted); muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; };
-cameraBtn.onclick = () => { if (!localStream) return; camOn = !camOn; localStream.getVideoTracks().forEach(t=>t.enabled = camOn); cameraBtn.textContent = camOn ? 'Stop Camera' : 'Start Camera'; };
-
-shareBtn.onclick = async () => {
-  if (!ws) { alert('Join a room first'); return; }
-  try {
-    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-    const screenTrack = screenStream.getVideoTracks()[0];
-    for (const peerId of Object.keys(senders)) {
-      const s = senders[peerId].videoSender;
-      if (s) await s.replaceTrack(screenTrack);
+  ws.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      handleMsg(msg);
+    } catch(e) {
+      console.error('invalid message', e);
     }
-    addOrReplaceLocalTile(screenStream);
-    screenTrack.onended = async () => {
-      if (!localStream) return;
-      for (const peerId of Object.keys(senders)) {
-        const s = senders[peerId].videoSender;
-        if (s) await s.replaceTrack(localStream.getVideoTracks()[0]);
-      }
-      addOrReplaceLocalTile(localStream);
-    };
-  } catch (e) { console.error('screen share failed', e); }
+  };
+
+  ws.onclose = () => {
+    appendMessage('<div class="meta">Disconnected from server</div>');
+    ws = null;
+    connectBtn.disabled = false;
+    disconnectBtn.disabled = true;
+    sendBtn.disabled = true;
+    participantsDiv.innerHTML = '';
+  };
+
+  ws.onerror = (e) => console.error('ws error', e);
 };
 
-sendChat.onclick = () => { const t = chatInput.value.trim(); if (!t || !ws) return; sendWS({ type:'chat', text:t }); log(`[me] ${t}`); chatInput.value=''; };
-
-/* manual device change handlers */
-cameraSelect.onchange = async () => {
-  console.log('cameraSelect changed by user', cameraSelect.value);
-  await applySelectedDevices();
-};
-micSelect.onchange = async () => {
-  console.log('micSelect changed by user', micSelect.value);
-  await applySelectedDevices();
+disconnectBtn.onclick = () => {
+  if (!ws) return;
+  ws.close();
+  ws = null;
+  connectBtn.disabled = false;
+  disconnectBtn.disabled = true;
+  sendBtn.disabled = true;
 };
 
-/* cleanup */
-function cleanupAll() {
-  myId=null; hostId=null; isWaiting=false;
-  myIdLabel.textContent='—'; roleLabel.textContent='—';
-  waitingOverlay.style.display='none'; pendingList.innerHTML=''; approvalToggle.checked=false;
-  Object.values(pcs).forEach(pc=>{ try{pc.close()}catch(e){} }); pcs={};
-  if (localStream) { localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
-  Object.keys(videoEls).forEach(k=>{ const el=document.getElementById(`tile-${k}`); if (el) el.remove(); });
-  videoEls={}; senders={};
-  if (ws) { try{ws.close()}catch(e){} ws=null; }
-  joinBtn.disabled=false; leaveBtn.disabled=true;
-  muteBtn.disabled=true; cameraBtn.disabled=true; shareBtn.disabled=true; sendChat.disabled=true;
-}
+sendBtn.onclick = () => {
+  const t = msgInput.value.trim();
+  if (!t || !ws) return;
+  ws.send(JSON.stringify({ type: 'chat', text: t }));
+  appendMessage(`<div><strong>[me]</strong> ${escapeHtml(t)}</div>`);
+  msgInput.value = '';
+};
 
-/* util */
-function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g,c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function handleMsg(msg) {
+  switch (msg.type) {
+    case 'welcome':
+      myId = msg.id;
+      appendMessage(`<div class="meta">Welcome — your id: ${msg.id}</div>`);
+      renderParticipants(msg.participants);
+      sendBtn.disabled = false;
+      break;
 
-/* init */
-(async function init() {
-  if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
-    await enumerateAndPopulateDevices();
+    case 'participants':
+      renderParticipants(msg.participants);
+      break;
+
+    case 'participant-joined':
+      appendMessage(`<div class="meta">${escapeHtml(msg.name)} joined (${msg.id})</div>`);
+      break;
+
+    case 'participant-left':
+      appendMessage(`<div class="meta">${escapeHtml(msg.name)} left (${msg.id})</div>`);
+      break;
+
+    case 'chat':
+      appendMessage(`<div><strong>${escapeHtml(msg.name)}</strong> ${escapeHtml(msg.text)}</div>`);
+      break;
+
+    case 'error':
+      appendMessage(`<div class="meta" style="color:crimson">Error: ${escapeHtml(msg.message)}</div>`);
+      break;
+
+    default:
+      console.log('unknown message', msg);
   }
-})();
+}
 </script>
 </body>
 </html>
