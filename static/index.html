@@ -2,35 +2,33 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Chat + Audio — Approval Demo</title>
+  <title>Chat + Approval + Audio (Mini Meet)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root{--bg:#0f1724;--card:#071225;--muted:#9aa4b2}
     body{font-family:Inter,Arial,Helvetica,sans-serif;background:var(--bg);color:#e6eef6;margin:0;padding:16px}
     .wrap{max-width:980px;margin:0 auto}
     header{display:flex;align-items:center;gap:12px}
-    input,button{padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:var(--card);color:inherit}
+    input,select,button{padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:var(--card);color:inherit}
     button{background:#6d28d9;border:none;cursor:pointer}
     .row{display:flex;gap:8px;align-items:center;margin-top:12px}
     .main{display:flex;gap:12px;margin-top:12px}
     .left{flex:1}
     .panel{background:var(--card);padding:12px;border-radius:8px}
-    #chat{height:240px;overflow:auto;padding:8px;border-radius:6px;background:#081022}
+    #chat{height:320px;overflow:auto;padding:8px;border-radius:6px;background:#081022}
     .msg{margin-bottom:8px}
     .meta{font-size:12px;color:var(--muted)}
     .participants, .pending{margin-top:8px}
     .small{font-size:13px;color:var(--muted)}
     .hidden{display:none}
-    .participant-row{display:flex;justify-content:space-between;align-items:center;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:6px}
-    .host-badge{display:inline-block;background:#eab308;color:#08111a;padding:2px 8px;border-radius:999px;font-size:11px;margin-left:8px}
-    .audio-tile{margin-top:8px;padding:8px;border-radius:6px;background:rgba(255,255,255,0.01)}
+    .controls{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h3>Chat + Audio — Approval Demo</h3>
-      <div class="small">(simple)</div>
+      <h3>Mini Meet — Chat + Approval + Audio</h3>
+      <div class="small">(simple demo)</div>
     </header>
 
     <div class="row">
@@ -38,7 +36,6 @@
       <label>Room: <input id="room" value="main" /></label>
       <button id="connect">Connect</button>
       <button id="disconnect" disabled>Disconnect</button>
-      <button id="copyLink">Copy room link</button>
       <div style="flex:1"></div>
       <label class="small">Require approval</label>
       <input id="approvalToggle" type="checkbox" />
@@ -48,14 +45,21 @@
       <div class="left panel">
         <div id="chat"></div>
 
-        <div style="display:flex;gap:8px;margin-top:10px">
+        <div class="controls">
           <input id="message" placeholder="Type message..." style="flex:1" />
           <button id="send" disabled>Send</button>
-          <button id="muteBtn" disabled>Mute</button>
         </div>
 
-        <div id="audios" style="margin-top:12px">
-          <div class="meta">Remote audio streams will appear below:</div>
+        <hr style="border:none;height:8px;opacity:0" />
+
+        <div>
+          <strong class="small">Audio</strong>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+            <select id="micSelect"></select>
+            <button id="startAudio" disabled>Start Audio</button>
+            <button id="muteBtn" disabled>Mute</button>
+          </div>
+          <div class="meta" style="margin-top:6px">Note: for best results add a TURN server to the client ICE_SERVERS.</div>
         </div>
       </div>
 
@@ -70,104 +74,155 @@
       </aside>
     </div>
 
-    <div id="waiting" class="panel hidden" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);min-width:260px;text-align:center;z-index:40">
+    <!-- waiting overlay -->
+    <div id="waiting" class="panel hidden" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);min-width:300px;text-align:center;z-index:40">
       <div class="small">Waiting for host approval...</div>
       <div style="margin-top:10px"><button id="leavePending">Leave</button></div>
     </div>
   </div>
 
 <script>
-/*  Audio + signaling client (works with your existing FastAPI signaling server)
-    - Uses the same JSON messages your server already uses:
-      welcome (contains participants), participants, participant-joined,
-      and server forwards type 'offer', 'answer', 'ice-candidate' to target.
-    - Add TURN credentials to ICE_SERVERS for reliable worldwide connectivity.
+/* Client: chat + approval + WebRTC audio
+   - Edit ICE_SERVERS below to add TURN credentials for reliable worldwide connectivity.
 */
 
+/* ---------- Configuration ----------
+ - Add TURN server here if you have one (recommended).
+ - Example TURN entry:
+   { urls: "turn:turn.example.com:3478", username: "user", credential: "pass" }
+------------------------------------ */
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" }
+  // add TURN entries here
+];
+
+/* ---------- UI elements ---------- */
+const nameEl = document.getElementById('name');
+const roomEl = document.getElementById('room');
+const connectBtn = document.getElementById('connect');
+const disconnectBtn = document.getElementById('disconnect');
+const chatEl = document.getElementById('chat');
+const participantsEl = document.getElementById('participants');
+const pendingEl = document.getElementById('pendingList');
+const msgEl = document.getElementById('message');
+const sendBtn = document.getElementById('send');
+const approvalToggle = document.getElementById('approvalToggle');
+const waitingBox = document.getElementById('waiting');
+const leavePending = document.getElementById('leavePending');
+
+const micSelect = document.getElementById('micSelect');
+const startAudioBtn = document.getElementById('startAudio');
+const muteBtn = document.getElementById('muteBtn');
+
+/* ---------- State ---------- */
 let ws = null;
 let myId = null;
 let hostId = null;
 let localStream = null;
-const pcs = {};           // peerId -> RTCPeerConnection
-const remoteEls = {};     // peerId -> audio element
-let muted = false;
+const pcs = {};      // peerId -> RTCPeerConnection
+const audioEls = {}; // peerId -> audio element
+let isMuted = false;
 
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" }
-  // If you have a TURN server, replace above or add:
-  // { urls: "turn:YOUR_TURN_HOST:3478", username: "user", credential: "pass" }
-];
+/* ---------- helpers ---------- */
+function esc(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c)); }
+function addChat(html){ const d=document.createElement('div'); d.className='msg'; d.innerHTML=html; chatEl.appendChild(d); chatEl.scrollTop=chatEl.scrollHeight; }
+function renderParticipants(list){ participantsEl.innerHTML=''; (list||[]).forEach(p=>{ const d=document.createElement('div'); d.className='meta'; d.innerHTML=`<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`; participantsEl.appendChild(d); }); }
+function renderPending(list){ pendingEl.innerHTML=''; (list||[]).forEach(p=>{ const row=document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.marginBottom='6px'; row.innerHTML=`<div>${esc(p.name)}<div class="meta">${esc(p.id)}</div></div>`; const btns=document.createElement('div'); const a=document.createElement('button'); a.textContent='Accept'; a.onclick=()=>{ sendAction('accept', p.id); row.remove(); }; const r=document.createElement('button'); r.textContent='Reject'; r.onclick=()=>{ if(confirm('Reject '+p.name+'?')){ sendAction('reject', p.id); row.remove(); } }; btns.appendChild(a); btns.appendChild(r); row.appendChild(btns); pendingEl.appendChild(row); }); }
 
-const nameEl=document.getElementById('name');
-const roomEl=document.getElementById('room');
-const connectBtn=document.getElementById('connect');
-const disconnectBtn=document.getElementById('disconnect');
-const chatEl=document.getElementById('chat');
-const participantsEl=document.getElementById('participants');
-const pendingEl=document.getElementById('pendingList');
-const msgEl=document.getElementById('message');
-const sendBtn=document.getElementById('send');
-const approvalToggle=document.getElementById('approvalToggle');
-const waitingBox=document.getElementById('waiting');
-const leavePending=document.getElementById('leavePending');
-const muteBtn=document.getElementById('muteBtn');
-const audiosDiv=document.getElementById('audios');
-const copyLinkBtn=document.getElementById('copyLink');
+/* ---------- signalling helpers ---------- */
+function sendAction(action, target, extra={}){ if(!ws) return; ws.send(JSON.stringify(Object.assign({ type:'action', action, target }, extra))); }
+function sendSignalling(payload){ if(!ws || ws.readyState !== WebSocket.OPEN) return; ws.send(JSON.stringify(Object.assign({ from: myId }, payload))); }
 
-function esc(s){ return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c)); }
-function addChat(html){ const d=document.createElement('div'); d.className='msg'; d.innerHTML=html; chatEl.appendChild(d); chatEl.scrollTop = chatEl.scrollHeight; }
-
-function safeSend(obj){
-  if(!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify(obj));
-}
-
-/* ---- Microphone management ---- */
-async function startLocalMic(){
-  if(localStream) return localStream;
-  try{
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    muted = false; muteBtn.textContent = 'Mute'; muteBtn.disabled = false;
-    return localStream;
-  }catch(e){
-    addChat('<div class="meta" style="color:crimson">Mic permission denied or error</div>');
-    throw e;
+/* ---------- WebRTC audio logic ---------- */
+async function enumerateMics() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    micSelect.innerHTML = '';
+    mics.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.deviceId;
+      opt.textContent = m.label || m.deviceId;
+      micSelect.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn('enumerateDevices failed', e);
   }
 }
-function setLocalMute(val){
-  muted = !!val;
-  if(localStream) localStream.getAudioTracks().forEach(t => t.enabled = !muted);
-  muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+
+async function ensureLocalStream(deviceId = undefined) {
+  if (localStream) {
+    // if device changed, replace track
+    if (deviceId) {
+      const newStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+      const newTrack = newStream.getAudioTracks()[0];
+      if (localStream && localStream.getAudioTracks()[0]) {
+        // replaceTrack for each sender
+        for (const peerId of Object.keys(pcs)) {
+          const pc = pcs[peerId];
+          const senders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
+          if (senders[0]) {
+            try { senders[0].replaceTrack(newTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+          }
+        }
+      }
+      // stop previous tracks and set new stream
+      localStream.getTracks().forEach(t => t.stop());
+      localStream = newStream;
+    }
+    return localStream;
+  }
+
+  // either no stream -> create
+  try {
+    const constraints = deviceId ? { audio: { deviceId: { exact: deviceId } } } : { audio: true };
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    addChat('<div class="meta">Local microphone opened</div>');
+    return localStream;
+  } catch (err) {
+    addChat('<div class="meta" style="color:crimson">Microphone access denied or not available</div>');
+    throw err;
+  }
 }
 
-/* ---- WebRTC helpers ---- */
-function makePC(peerId){
-  if(pcs[peerId]) return pcs[peerId];
+function makeAudioElement(peerId) {
+  if (audioEls[peerId]) return audioEls[peerId];
+  const a = document.createElement('audio');
+  a.autoplay = true;
+  a.id = 'audio-' + peerId;
+  a.style.display = 'none'; // invisible but audible
+  document.body.appendChild(a);
+  audioEls[peerId] = a;
+  return a;
+}
+
+function createPeerConnection(peerId) {
+  if (pcs[peerId]) return pcs[peerId];
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-  // add local audio track(s)
-  if(localStream){
-    for(const t of localStream.getTracks()) pc.addTrack(t, localStream);
+  // add local audio tracks if available
+  if (localStream) {
+    localStream.getTracks().forEach(track => {
+      try { pc.addTrack(track, localStream); } catch(e) { console.warn(e); }
+    });
   }
 
-  pc.onicecandidate = (ev) => {
-    if(ev.candidate){
-      safeSend({ type: 'ice-candidate', to: peerId, candidate: ev.candidate, from: myId });
-    }
+  pc.onicecandidate = ev => {
+    if (ev.candidate) sendSignalling({ type: 'ice-candidate', to: peerId, candidate: ev.candidate });
   };
 
-  pc.ontrack = (ev) => {
-    // first stream -> create audio element
-    const stream = ev.streams && ev.streams[0];
-    if(!stream) return;
-    attachRemoteStream(peerId, stream);
+  pc.ontrack = ev => {
+    const el = makeAudioElement(peerId);
+    el.srcObject = ev.streams[0];
+    el.play().catch(()=>{/* may require user gesture */});
+    addChat(`<div class="meta">Playing audio from ${peerId}</div>`);
   };
 
   pc.onconnectionstatechange = () => {
-    if(pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected'){
-      try{ pc.close(); }catch(e){}
+    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      try { pc.close(); } catch(e){}
       delete pcs[peerId];
-      removeRemoteStream(peerId);
+      const a = audioEls[peerId]; if (a) { try { a.remove(); } catch(e){} delete audioEls[peerId]; }
     }
   };
 
@@ -175,196 +230,137 @@ function makePC(peerId){
   return pc;
 }
 
-function attachRemoteStream(peerId, stream){
-  if(remoteEls[peerId]) {
-    remoteEls[peerId].srcObject = stream;
+async function createOffer(peerId) {
+  try {
+    await ensureLocalStream(micSelect.value || undefined);
+  } catch(e) {
+    console.warn('no local stream, cannot create offer');
     return;
   }
-  const wrap = document.createElement('div'); wrap.className='audio-tile';
-  const label = document.createElement('div'); label.innerHTML = `<strong>${peerId}</strong>`;
-  const audio = document.createElement('audio'); audio.autoplay = true; audio.controls = true; audio.srcObject = stream;
-  wrap.appendChild(label); wrap.appendChild(audio);
-  audiosDiv.appendChild(wrap);
-  remoteEls[peerId] = audio;
+  const pc = createPeerConnection(peerId);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  sendSignalling({ type: 'offer', to: peerId, sdp: offer.sdp, sdpType: offer.type });
 }
 
-function removeRemoteStream(peerId){
-  const el = remoteEls[peerId];
-  if(el && el.parentNode) el.parentNode.remove();
-  delete remoteEls[peerId];
-}
-
-/* ---- Offer / Answer flow ---- */
-async function createOffer(targetId){
-  if(!localStream) {
-    try{ await startLocalMic(); } catch(e){ return; }
-  }
-  if(pcs[targetId]) return; // already have pc
-  const pc = makePC(targetId);
-  try{
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    safeSend({ type:'offer', to: targetId, sdp: offer.sdp, sdpType: offer.type, from: myId });
-    addChat(`<div class="meta">Sent offer → ${targetId}</div>`);
-  }catch(e){
-    console.error('offer error', e);
-  }
-}
-
-async function handleOffer(msg){
+async function handleOffer(msg) {
   const from = msg.from;
-  if(!from) return;
-  // ensure we have mic available to send audio back
-  if(!localStream){
-    try{ await startLocalMic(); }catch(e){}
+  try {
+    await ensureLocalStream(micSelect.value || undefined);
+  } catch(e) {
+    console.warn('cannot open mic to answer');
+    return;
   }
-  const pc = makePC(from);
-  await pc.setRemoteDescription({ type:'offer', sdp: msg.sdp });
+  const pc = createPeerConnection(from);
+  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  safeSend({ type:'answer', to: from, sdp: answer.sdp, sdpType: answer.type, from: myId });
-  addChat(`<div class="meta">Answered offer from ${from}</div>`);
+  sendSignalling({ type: 'answer', to: from, sdp: answer.sdp, sdpType: answer.type });
 }
 
-async function handleAnswer(msg){
+async function handleAnswer(msg) {
   const from = msg.from;
   const pc = pcs[from];
-  if(!pc) return;
-  await pc.setRemoteDescription({ type:'answer', sdp: msg.sdp });
-  addChat(`<div class="meta">Received answer from ${from}</div>`);
+  if (!pc) return;
+  await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
 }
 
-async function handleIce(msg){
+async function handleRemoteICE(msg) {
   const from = msg.from;
-  const pc = pcs[from];
-  if(!pc) return;
-  try{
-    await pc.addIceCandidate(msg.candidate);
-  }catch(e){ console.warn('ICE add error', e); }
+  if (!pcs[from]) createPeerConnection(from); // create placeholder pc
+  try {
+    await pcs[from].addIceCandidate(msg.candidate);
+  } catch (e) {
+    console.warn('ICE add error', e);
+  }
 }
 
-/* ---- Signaling and UI ---- */
-function renderParticipants(list){
-  participantsEl.innerHTML = '';
-  (list||[]).forEach(p=>{
-    const row = document.createElement('div'); row.className='participant-row';
-    const left = document.createElement('div'); left.innerHTML = `<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
-    const right = document.createElement('div');
-    if(p.is_host) { const hb = document.createElement('span'); hb.className='host-badge'; hb.textContent='HOST'; right.appendChild(hb); }
-    row.appendChild(left); row.appendChild(right);
-    participantsEl.appendChild(row);
-  });
-}
-function renderPending(list){
-  pendingEl.innerHTML = '';
-  (list||[]).forEach(p=>{
-    const row = document.createElement('div'); row.className='participant-row';
-    row.id = 'pending-'+p.id;
-    const left = document.createElement('div'); left.innerHTML = `<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
-    const right = document.createElement('div');
-    const acc = document.createElement('button'); acc.textContent='Accept';
-    acc.onclick = ()=>{ safeSend({ type:'action', action:'accept', target: p.id }); row.remove(); };
-    const rej = document.createElement('button'); rej.textContent='Reject';
-    rej.onclick = ()=>{ if(confirm('Reject '+p.name+'?')){ safeSend({ type:'action', action:'reject', target: p.id }); row.remove(); } };
-    right.appendChild(acc); right.appendChild(rej);
-    row.appendChild(left); row.appendChild(right);
-    pendingEl.appendChild(row);
-  });
-}
-
-function handle(msg){
-  switch(msg.type){
+/* ---------- Integrate with your signalling messages ---------- */
+function handleServerMessage(msg) {
+  // standard chat/approval handlers (existing)
+  switch (msg.type) {
     case 'waiting':
       waitingBox.classList.remove('hidden');
       addChat('<div class="meta">Waiting for host approval...</div>');
       sendBtn.disabled = true;
-      muteBtn.disabled = true;
+      startAudioBtn.disabled = true;
       break;
-
+    case 'join-request':
+      addChat(`<div class="meta">Join request: ${esc(msg.participant.name)}</div>`);
+      break;
     case 'welcome':
       waitingBox.classList.add('hidden');
       myId = msg.id;
       hostId = msg.host_id;
       addChat(`<div class="meta">Welcome — id: ${esc(msg.id)}</div>`);
-      // enrich participants with host flag
-      const parts = (msg.participants||[]).map(p => ({ id: p.id, name: p.name, is_host: (p.id === msg.host_id) }));
-      renderParticipants(parts);
+      renderParticipants(msg.participants || []);
       sendBtn.disabled = false;
-      // try to get mic permission early
-      startLocalMic().catch(()=>{});
-      // create offers to existing participants (we initiate to others)
-      for(const p of parts){
-        if(p.id !== myId) createOffer(p.id);
-      }
-      // host might need the pending list
-      if(msg.pending) renderPending(msg.pending);
-      // room meta
-      if(msg.room_meta) approvalToggle.checked = !!msg.room_meta.require_approval;
+      startAudioBtn.disabled = false;
+      if (msg.room_meta) approvalToggle.checked = !!msg.room_meta.require_approval;
+      if (msg.pending) renderPending(msg.pending);
+      // create offers to all listed participants
+      (msg.participants || []).forEach(p => {
+        if (p.id !== myId) setTimeout(()=>createOffer(p.id).catch(e=>console.warn(e)), 150);
+      });
       break;
-
     case 'participants':
-      // server sends array of approved participants (id,name)
-      const normalized = (msg.participants||[]).map(p=>({id:p.id, name:p.name, is_host: (p.id === hostId)}));
-      renderParticipants(normalized);
+      renderParticipants(msg.participants || []);
       break;
-
     case 'pending':
       renderPending(msg.pending || []);
       break;
-
-    case 'join-request':
-      addChat(`<div class="meta">Join request: ${esc(msg.participant.name)}</div>`);
-      break;
-
     case 'participant-joined':
       addChat(`<div class="meta">${esc(msg.name)} joined</div>`);
-      // existing approved peers should create offer to new participant
-      if(msg.id && msg.id !== myId) {
-        createOffer(msg.id);
-      }
+      // start sending offers to new approved participant
+      if (msg.id && msg.id !== myId) setTimeout(()=>createOffer(msg.id).catch(e=>console.warn(e)), 200);
       break;
-
     case 'participant-left':
       addChat(`<div class="meta">${esc(msg.name)} left</div>`);
-      // tear down peer connection if any
-      if(pcs[msg.id]){ try{ pcs[msg.id].close(); }catch(e){} delete pcs[msg.id]; }
-      if(remoteEls[msg.id]) removeRemoteStream(msg.id);
+      // close pc if exists
+      if (pcs[msg.id]) try { pcs[msg.id].close(); } catch(e){} delete pcs[msg.id];
+      if (audioEls[msg.id]) try { audioEls[msg.id].remove(); } catch(e){} delete audioEls[msg.id];
       break;
-
     case 'chat':
       addChat(`<strong>${esc(msg.name)}</strong> ${esc(msg.text)}`);
       break;
-
-    case 'offer':
-      handleOffer(msg).catch(e=>console.error(e));
-      break;
-    case 'answer':
-      handleAnswer(msg).catch(e=>console.error(e));
-      break;
-    case 'ice-candidate':
-      handleIce(msg);
-      break;
-
     case 'room-meta':
-      if(msg.meta) approvalToggle.checked = !!msg.meta.require_approval;
+      if (msg.meta) approvalToggle.checked = !!msg.meta.require_approval;
       break;
-
     case 'command':
-      if(msg.cmd === 'you-are-rejected'){ addChat('<div class="meta" style="color:crimson">You were rejected</div>'); if(ws) ws.close(); cleanup(); }
+      if (msg.cmd === 'you-are-rejected') {
+        addChat('<div class="meta" style="color:crimson">You were rejected by host</div>');
+        if (ws) ws.close();
+        cleanup();
+      } else if (msg.cmd === 'force-mute') {
+        // host asked to force-mute this client
+        if (localStream) {
+          localStream.getAudioTracks().forEach(t => t.enabled = false);
+          isMuted = true; muteBtn.textContent = 'Unmute';
+        }
+        addChat(`<div class="meta">You were asked to mute by host</div>`);
+      }
       break;
-
     case 'error':
       addChat(`<div class="meta" style="color:crimson">Error: ${esc(msg.message)}</div>`);
       break;
-
+    // WebRTC signalling messages
+    case 'offer':
+      handleOffer(msg).catch(e=>console.warn(e));
+      break;
+    case 'answer':
+      handleAnswer(msg).catch(e=>console.warn(e));
+      break;
+    case 'ice-candidate':
+      handleRemoteICE(msg).catch(e=>console.warn(e));
+      break;
     default:
-      console.log('unknown message', msg);
+      console.log('unhandled msg', msg);
   }
 }
 
-/* ---- WebSocket wiring ---- */
+/* ---------- UI wiring ---------- */
 connectBtn.onclick = () => {
-  if(ws) return;
+  if (ws) return;
   const name = (nameEl.value || 'Guest').trim();
   const room = (roomEl.value || 'main').trim();
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -372,13 +368,17 @@ connectBtn.onclick = () => {
   ws = new WebSocket(url);
 
   ws.onopen = () => {
-    safeSend({ type: 'join', name });
-    connectBtn.disabled = true; disconnectBtn.disabled = false;
+    ws.send(JSON.stringify({ type: 'join', name }));
     addChat('<div class="meta">Connecting…</div>');
+    connectBtn.disabled = true;
+    disconnectBtn.disabled = false;
   };
 
   ws.onmessage = (evt) => {
-    try{ const m = JSON.parse(evt.data); handle(m); } catch(e) { console.error(e); }
+    try {
+      const msg = JSON.parse(evt.data);
+      handleServerMessage(msg);
+    } catch (e) { console.error(e); }
   };
 
   ws.onclose = () => {
@@ -386,58 +386,110 @@ connectBtn.onclick = () => {
     cleanup();
   };
 
-  ws.onerror = (e) => { console.error('ws error', e); addChat('<div class="meta" style="color:crimson">WebSocket error</div>'); };
+  ws.onerror = (e) => {
+    console.error('ws error', e);
+  };
+
+  // enumerate mics for device selection
+  enumerateMics();
 };
 
-disconnectBtn.onclick = () => { if(ws) ws.close(); cleanup(); };
-sendBtn.onclick = () => { const t = msgEl.value.trim(); if(!t || !ws) return; safeSend({ type:'chat', text: t }); addChat(`<strong>[me]</strong> ${esc(t)}`); msgEl.value=''; };
-approvalToggle.onchange = ()=>{ if(!ws) { approvalToggle.checked = !approvalToggle.checked; alert('Connect as host to change'); return; } safeSend({ type:'action', action:'set-approval', value: approvalToggle.checked }); };
-leavePending.onclick = ()=>{ if(ws) ws.close(); cleanup(); };
-
-muteBtn.onclick = ()=>{
-  setLocalMute(!muted);
+disconnectBtn.onclick = () => {
+  if (ws) ws.close();
+  cleanup();
 };
 
-copyLinkBtn.onclick = ()=>{
-  const room = roomEl.value || 'main';
-  const url = `${location.origin}${location.pathname}#room=${encodeURIComponent(room)}`;
-  navigator.clipboard?.writeText(url).then(()=> addChat('<div class="meta">Room link copied</div>'), ()=> alert(url));
+sendBtn.onclick = () => {
+  const t = (msgEl.value || '').trim();
+  if (!t || !ws) return;
+  ws.send(JSON.stringify({ type: 'chat', text: t }));
+  addChat(`<strong>[me]</strong> ${esc(t)}`);
+  msgEl.value = '';
 };
 
-/* cleanup */
-function cleanup(){
-  try{ if(ws){ ws.close(); } } catch(e){}
+approvalToggle.onchange = () => {
+  if (!ws) { approvalToggle.checked = !approvalToggle.checked; alert('Connect as host to change'); return; }
+  sendAction('set-approval', null, { value: approvalToggle.checked });
+};
+
+leavePending.onclick = () => {
+  if (ws) ws.close();
+  cleanup();
+};
+
+startAudioBtn.onclick = async () => {
+  try {
+    await ensureLocalStream(micSelect.value || undefined);
+    // add local tracks to existing peer connections
+    for (const peerId of Object.keys(pcs)) {
+      const pc = pcs[peerId];
+      const senders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
+      const localTrack = localStream.getAudioTracks()[0];
+      if (senders.length > 0) {
+        try { await senders[0].replaceTrack(localTrack); } catch(e){ console.warn(e); }
+      } else {
+        try { pc.addTrack(localTrack, localStream); } catch(e) { console.warn(e); }
+      }
+    }
+    addChat('<div class="meta">Local audio started</div>');
+    startAudioBtn.disabled = true;
+    muteBtn.disabled = false;
+  } catch (e) {
+    console.warn(e);
+    alert('Microphone error: ' + (e && e.message));
+  }
+};
+
+muteBtn.onclick = () => {
+  if (!localStream) return;
+  isMuted = !isMuted;
+  localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+  muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+};
+
+/* when user changes mic selection, replace track */
+micSelect.onchange = async () => {
+  if (!localStream) return;
+  try {
+    await ensureLocalStream(micSelect.value);
+    addChat('<div class="meta">Switched microphone</div>');
+  } catch (e) {
+    console.warn(e);
+  }
+};
+
+/* cleanup all state */
+function cleanup() {
+  // close pcs
+  Object.values(pcs).forEach(pc => { try{ pc.close(); } catch(e){} });
+  for (const k in pcs) delete pcs[k];
+  // stop local stream
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
+  // remove audio elements
+  Object.values(audioEls).forEach(a => { try{ a.remove(); } catch(e){} });
+  for (const k in audioEls) delete audioEls[k];
   ws = null;
   myId = null;
   hostId = null;
+  connectBtn.disabled = false;
+  disconnectBtn.disabled = true;
   sendBtn.disabled = true;
+  startAudioBtn.disabled = true;
   muteBtn.disabled = true;
   waitingBox.classList.add('hidden');
-  // stop mic
-  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream = null; }
-  // close pcs
-  for(const k of Object.keys(pcs)){ try{ pcs[k].close(); }catch(e){} delete pcs[k]; }
-  // remove remote audio els
-  for(const k of Object.keys(remoteEls)){ removeRemoteStream(k); }
   participantsEl.innerHTML = '';
   pendingEl.innerHTML = '';
 }
 
-/* Enter to send */
-msgEl.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') sendBtn.click(); });
+/* keyboard send */
+msgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBtn.click(); });
 
-/* On load: prefill room from hash */
-(function(){
-  try{
-    const h = location.hash || '';
-    if(h.startsWith('#room=')){
-      document.getElementById('room').value = decodeURIComponent(h.slice(6));
-    } else {
-      const params = new URLSearchParams(location.search);
-      if(params.get('room')) document.getElementById('room').value = params.get('room');
-    }
-  }catch(e){}
-})();
+/* on load enumerate devices if permission already granted */
+navigator.permissions && navigator.permissions.query({name:'microphone'}).then(() => enumerateMics()).catch(()=>{ /* ignore */ });
+
 </script>
 </body>
 </html>
