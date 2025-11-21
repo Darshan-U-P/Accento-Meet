@@ -22,6 +22,10 @@
     .participants, .pending{margin-top:8px}
     .small{font-size:13px;color:var(--muted)}
     .hidden{display:none}
+    .host-badge{display:inline-block;background:#eab308;color:#08111a;padding:2px 8px;border-radius:999px;font-size:11px;margin-left:8px}
+    .participant-row{display:flex;justify-content:space-between;align-items:center;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:6px}
+    .pending-controls{display:flex;gap:6px;margin-top:8px}
+    .muted{opacity:.6}
   </style>
 </head>
 <body>
@@ -36,6 +40,7 @@
       <label>Room: <input id="room" value="main" /></label>
       <button id="connect">Connect</button>
       <button id="disconnect" disabled>Disconnect</button>
+      <button id="copyLink" title="Copy room link">Copy room link</button>
       <div style="flex:1"></div>
       <label class="small">Require approval</label>
       <input id="approvalToggle" type="checkbox" />
@@ -50,12 +55,21 @@
         </div>
       </div>
 
-      <aside style="width:260px">
+      <aside style="width:280px">
         <div class="panel">
-          <div class="small">Participants</div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="small">Participants</div>
+            <div id="hostLabel" class="small muted">—</div>
+          </div>
           <div id="participants" class="participants"></div>
           <hr style="border:none;height:8px;opacity:0" />
-          <div class="small">Pending (host only)</div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="small">Pending (host only)</div>
+            <div>
+              <button id="acceptAll" title="Accept all pending" style="display:none">Accept all</button>
+              <button id="refreshPending" title="Refresh pending" style="display:none">Refresh</button>
+            </div>
+          </div>
           <div id="pendingList" class="pending"></div>
         </div>
       </aside>
@@ -69,7 +83,7 @@
   </div>
 
 <script>
-// Minimal client with approval support
+// Minimal client with approval support + small UI improvements
 let ws=null, myId=null, hostId=null;
 const nameEl=document.getElementById('name');
 const roomEl=document.getElementById('room');
@@ -83,45 +97,205 @@ const sendBtn=document.getElementById('send');
 const approvalToggle=document.getElementById('approvalToggle');
 const waitingBox=document.getElementById('waiting');
 const leavePending=document.getElementById('leavePending');
+const acceptAllBtn=document.getElementById('acceptAll');
+const refreshPendingBtn=document.getElementById('refreshPending');
+const copyLinkBtn=document.getElementById('copyLink');
+const hostLabel=document.getElementById('hostLabel');
 
 function esc(s){return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c));}
 function addChat(html){const d=document.createElement('div');d.className='msg';d.innerHTML=html;chatEl.appendChild(d);chatEl.scrollTop=chatEl.scrollHeight}
-function renderParticipants(list){participantsEl.innerHTML='';(list||[]).forEach(p=>{const n=document.createElement('div');n.textContent=`${p.name} (${p.id})`;participantsEl.appendChild(n)})}
-function renderPending(list){pendingEl.innerHTML='';(list||[]).forEach(p=>{const row=document.createElement('div');row.style.display='flex';row.style.justifyContent='space-between';row.style.marginBottom='6px';row.innerHTML=`<div>${esc(p.name)}<div class=\'meta\'>${p.id}</div></div>`;const btns=document.createElement('div');const a=document.createElement('button');a.textContent='Accept';a.onclick=()=>{sendAction('accept',p.id);row.remove()};const r=document.createElement('button');r.textContent='Reject';r.onclick=()=>{if(confirm('Reject '+p.name+'?')){sendAction('reject',p.id);row.remove()}};btns.appendChild(a);btns.appendChild(r);row.appendChild(btns);pendingEl.appendChild(row)})}
-
-function sendAction(action,target,extra={}){if(!ws)return;ws.send(JSON.stringify(Object.assign({type:'action',action,target},extra)))}
-
-connectBtn.onclick=()=>{if(ws) return;const name=nameEl.value||'Guest';const room=roomEl.value||'main';const proto=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(room)}`);
-ws.onopen=()=>{ws.send(JSON.stringify({type:'join',name}));connectBtn.disabled=true;disconnectBtn.disabled=false;addChat('<div class="meta">Connecting…</div>')}
-ws.onmessage=e=>{try{const m=JSON.parse(e.data);handle(m)}catch(err){console.error(err)}}
-ws.onclose=()=>{addChat('<div class="meta">Disconnected</div>');cleanup()} 
+function setHostUI(isHost){
+  // show host controls only for host
+  acceptAllBtn.style.display = isHost ? 'inline-block' : 'none';
+  refreshPendingBtn.style.display = isHost ? 'inline-block' : 'none';
+  // approval toggle editable only for host
+  approvalToggle.disabled = !isHost;
+}
+function renderParticipants(list){
+  participantsEl.innerHTML='';
+  (list||[]).forEach(p=>{
+    const row=document.createElement('div'); row.className='participant-row';
+    const left=document.createElement('div');
+    left.innerHTML=`<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
+    const right=document.createElement('div');
+    if(p.is_host) {
+      const badge=document.createElement('span'); badge.className='host-badge'; badge.textContent='HOST';
+      right.appendChild(badge);
+    }
+    row.appendChild(left); row.appendChild(right);
+    participantsEl.appendChild(row);
+  });
+  // update host label
+  const host = (list||[]).find(x=>x.is_host);
+  hostLabel.textContent = host ? `host: ${host.name}` : 'host: —';
+}
+function renderPending(list){
+  pendingEl.innerHTML='';
+  (list||[]).forEach(p=>{
+    const row=document.createElement('div');
+    row.className='participant-row';
+    row.id = 'pending-'+p.id;
+    const left=document.createElement('div');
+    left.innerHTML=`<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`;
+    const right=document.createElement('div');
+    const acc=document.createElement('button'); acc.textContent='Accept'; acc.onclick=()=>{ sendAction('accept',p.id); row.remove(); };
+    const rej=document.createElement('button'); rej.textContent='Reject'; rej.onclick=()=>{ if(confirm('Reject '+p.name+'?')){ sendAction('reject',p.id); row.remove(); } };
+    right.appendChild(acc); right.appendChild(rej);
+    row.appendChild(left); row.appendChild(right);
+    pendingEl.appendChild(row);
+  });
+  // show empty hint
+  if((list||[]).length===0){
+    const hint=document.createElement('div'); hint.className='meta muted'; hint.textContent='No pending requests';
+    pendingEl.appendChild(hint);
+  }
 }
 
-disconnectBtn.onclick=()=>{if(ws) ws.close();cleanup()}
+function sendAction(action,target,extra={}){ if(!ws) return; ws.send(JSON.stringify(Object.assign({type:'action',action,target},extra))) }
 
-sendBtn.onclick=()=>{const t=msgEl.value.trim(); if(!t||!ws) return; ws.send(JSON.stringify({type:'chat',text:t})); addChat(`<strong>[me]</strong> ${esc(t)}`); msgEl.value=''}
-approvalToggle.onchange=()=>{ if(!ws){approvalToggle.checked=!approvalToggle.checked;alert('Connect as host to change');return} sendAction('set-approval',null,{value:approvalToggle.checked}) }
-leavePending.onclick=()=>{ if(ws) ws.close(); cleanup() }
+connectBtn.onclick=()=>{
+  if(ws) return;
+  const name=nameEl.value||'Guest';
+  const room=roomEl.value||'main';
+  const proto=location.protocol==='https:'?'wss':'ws';
+  const url=`${proto}://${location.host}/ws/${encodeURIComponent(room)}`;
+  ws=new WebSocket(url);
 
-function handle(msg){switch(msg.type){
-  case 'waiting': waitingBox.classList.remove('hidden'); addChat('<div class="meta">You are waiting for approval</div>'); sendBtn.disabled=true; break;
-  case 'welcome': waitingBox.classList.add('hidden'); myId=msg.id; hostId=msg.host_id; addChat(`<div class="meta">Welcome — id: ${msg.id}</div>`); renderParticipants(msg.participants); sendBtn.disabled=false; if(msg.room_meta) approvalToggle.checked=!!msg.room_meta.require_approval; if(msg.pending) renderPending(msg.pending); break;
-  case 'participants': renderParticipants(msg.participants); break;
-  case 'pending': renderPending(msg.pending); break;
-  case 'join-request': addChat(`<div class='meta'>Join request: ${esc(msg.participant.name)}</div>`); break;
-  case 'participant-joined': addChat(`<div class='meta'>${esc(msg.name)} joined</div>`); break;
-  case 'participant-left': addChat(`<div class='meta'>${esc(msg.name)} left</div>`); break;
-  case 'chat': addChat(`<strong>${esc(msg.name)}</strong> ${esc(msg.text)}`); break;
-  case 'room-meta': if(msg.meta) approvalToggle.checked=!!msg.meta.require_approval; break;
-  case 'command': if(msg.cmd==='you-are-rejected'){ addChat('<div class=\'meta\' style=\'color:crimson\'>You were rejected</div>'); if(ws) ws.close(); cleanup() } break;
-  case 'error': addChat(`<div class=\'meta\' style=\'color:crimson\'>Error: ${esc(msg.message)}</div>`); break;
-  default: console.log('msg',msg)
-}}
+  ws.onopen=()=>{
+    ws.send(JSON.stringify({type:'join',name}));
+    connectBtn.disabled=true; disconnectBtn.disabled=false;
+    addChat('<div class="meta">Connecting…</div>');
+  };
 
-function cleanup(){ ws=null; myId=null; hostId=null; connectBtn.disabled=false; disconnectBtn.disabled=true; sendBtn.disabled=true; waitingBox.classList.add('hidden'); participantsEl.innerHTML=''; pendingEl.innerHTML=''}
+  ws.onmessage=e=>{ try{ const m=JSON.parse(e.data); handle(m); } catch(err){ console.error(err); } };
 
-// enter to send
-msgEl.addEventListener('keydown',e=>{ if(e.key==='Enter') sendBtn.click() })
+  ws.onclose=()=>{
+    addChat('<div class="meta">Disconnected</div>');
+    cleanup();
+  };
+
+  ws.onerror=(err)=>{ console.error('ws error', err); addChat('<div class="meta" style="color:crimson">WebSocket error</div>'); };
+};
+
+disconnectBtn.onclick=()=>{ if(ws) ws.close(); cleanup(); }
+
+copyLinkBtn.onclick=()=>{
+  const room = roomEl.value || 'main';
+  const url = `${location.origin}${location.pathname}#room=${encodeURIComponent(room)}`;
+  navigator.clipboard?.writeText(url).then(()=>{ addChat('<div class="meta">Room link copied</div>'); }, ()=>{ alert(url); });
+};
+
+sendBtn.onclick=()=>{ const t=msgEl.value.trim(); if(!t||!ws) return; ws.send(JSON.stringify({type:'chat',text:t})); addChat(`<strong>[me]</strong> ${esc(t)}`); msgEl.value=''; }
+
+approvalToggle.onchange=()=>{
+  if(!ws){ approvalToggle.checked = !approvalToggle.checked; alert('Connect as host to change'); return; }
+  sendAction('set-approval', null, { value: approvalToggle.checked });
+};
+
+acceptAllBtn.onclick=()=>{
+  // accept all items currently in pending list
+  const items = pendingEl.querySelectorAll('[id^="pending-"]');
+  items.forEach(it=>{
+    const id = it.id.replace('pending-','');
+    sendAction('accept', id);
+    it.remove();
+  });
+};
+
+refreshPendingBtn.onclick=()=>{ sendAction('refresh-pending', null); };
+
+leavePending.onclick=()=>{ if(ws) ws.close(); cleanup(); };
+
+function handle(msg){
+  switch(msg.type){
+    case 'waiting':
+      waitingBox.classList.remove('hidden');
+      addChat('<div class="meta">You are waiting for approval</div>');
+      sendBtn.disabled=true;
+      break;
+    case 'welcome':
+      waitingBox.classList.add('hidden');
+      myId = msg.id;
+      hostId = msg.host_id;
+      addChat(`<div class="meta">Welcome — id: ${esc(msg.id)}</div>`);
+      // participants from server may not include host flag — ensure presence
+      // normalize participants to include is_host flag by checking host_id
+      const parts = (msg.participants||[]).map(p=>({ id: p.id, name: p.name, is_host: (p.id === msg.host_id) }));
+      renderParticipants(parts);
+      setHostUI(myId === msg.host_id);
+      sendBtn.disabled=false;
+      if(msg.room_meta) approvalToggle.checked = !!msg.room_meta.require_approval;
+      if(msg.pending) renderPending(msg.pending);
+      break;
+    case 'participants':
+      // server sends array of approved participants (id, name)
+      const ps = (msg.participants||[]).map(p=>({ id: p.id, name: p.name, is_host: (p.id === hostId) }));
+      renderParticipants(ps);
+      break;
+    case 'pending':
+      renderPending(msg.pending || []);
+      break;
+    case 'join-request':
+      addChat(`<div class="meta">Join request: ${esc(msg.participant.name)}</div>`);
+      // hosts will receive 'pending' update soon; no further action
+      break;
+    case 'participant-joined':
+      addChat(`<div class="meta">${esc(msg.name)} joined</div>`);
+      break;
+    case 'participant-left':
+      addChat(`<div class="meta">${esc(msg.name)} left</div>`);
+      break;
+    case 'chat':
+      addChat(`<strong>${esc(msg.name)}</strong> ${esc(msg.text)}`);
+      break;
+    case 'room-meta':
+      if(msg.meta) approvalToggle.checked = !!msg.meta.require_approval;
+      break;
+    case 'command':
+      if(msg.cmd === 'you-are-rejected'){
+        addChat('<div class="meta" style="color:crimson">You were rejected</div>');
+        if(ws) ws.close();
+        cleanup();
+      }
+      break;
+    case 'error':
+      addChat(`<div class="meta" style="color:crimson">Error: ${esc(msg.message)}</div>`);
+      break;
+    default:
+      console.log('unknown message', msg);
+  }
+}
+
+function cleanup(){
+  try{ if(ws){ ws.close(); } } catch(e){}
+  ws = null;
+  myId = null;
+  hostId = null;
+  connectBtn.disabled = false;
+  disconnectBtn.disabled = true;
+  sendBtn.disabled = true;
+  waitingBox.classList.add('hidden');
+  participantsEl.innerHTML = '';
+  pendingEl.innerHTML = '';
+  setHostUI(false);
+}
+
+// Enter to send
+msgEl.addEventListener('keydown', e => { if(e.key === 'Enter') sendBtn.click(); });
+
+// on load: if URL has #room=... prefill room
+(function prefillRoomFromHash(){
+  try{
+    const h = location.hash || '';
+    if(h.startsWith('#room=')){
+      const r = decodeURIComponent(h.slice(6));
+      document.getElementById('room').value = r;
+    } else {
+      const params = new URLSearchParams(location.search);
+      if(params.get('room')) document.getElementById('room').value = params.get('room');
+    }
+  }catch(e){}
+})();
 </script>
 </body>
 </html>
