@@ -2,494 +2,217 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Chat + Approval + Audio (Mini Meet)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LightMeet — Demo</title>
   <style>
-    :root{--bg:#0f1724;--card:#071225;--muted:#9aa4b2}
-    body{font-family:Inter,Arial,Helvetica,sans-serif;background:var(--bg);color:#e6eef6;margin:0;padding:16px}
-    .wrap{max-width:980px;margin:0 auto}
-    header{display:flex;align-items:center;gap:12px}
-    input,select,button{padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:var(--card);color:inherit}
-    button{background:#6d28d9;border:none;cursor:pointer}
-    .row{display:flex;gap:8px;align-items:center;margin-top:12px}
-    .main{display:flex;gap:12px;margin-top:12px}
-    .left{flex:1}
-    .panel{background:var(--card);padding:12px;border-radius:8px}
-    #chat{height:320px;overflow:auto;padding:8px;border-radius:6px;background:#081022}
-    .msg{margin-bottom:8px}
-    .meta{font-size:12px;color:var(--muted)}
-    .participants, .pending{margin-top:8px}
-    .small{font-size:13px;color:var(--muted)}
-    .hidden{display:none}
-    .controls{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+    body { font-family: system-ui, sans-serif; padding: 18px; max-width:900px; margin:auto; }
+    .row { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+    select, input { padding:6px; }
+    #local, #remote { width:100%; }
+    .controls { margin-top:12px; }
+    .status { font-size:0.9rem; color: #444; margin-top:6px; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h3>Mini Meet — Chat + Approval + Audio</h3>
-      <div class="small">(simple demo)</div>
-    </header>
+  <h2>LightMeet — WebRTC demo (Render)</h2>
 
-    <div class="row">
-      <label>Name: <input id="name" value="Guest" /></label>
-      <label>Room: <input id="room" value="main" /></label>
-      <button id="connect">Connect</button>
-      <button id="disconnect" disabled>Disconnect</button>
-      <div style="flex:1"></div>
-      <label class="small">Require approval</label>
-      <input id="approvalToggle" type="checkbox" />
-    </div>
-
-    <div class="main">
-      <div class="left panel">
-        <div id="chat"></div>
-
-        <div class="controls">
-          <input id="message" placeholder="Type message..." style="flex:1" />
-          <button id="send" disabled>Send</button>
-        </div>
-
-        <hr style="border:none;height:8px;opacity:0" />
-
-        <div>
-          <strong class="small">Audio</strong>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-            <select id="micSelect"></select>
-            <button id="startAudio" disabled>Start Audio</button>
-            <button id="muteBtn" disabled>Mute</button>
-          </div>
-          <div class="meta" style="margin-top:6px">Note: for best results add a TURN server to the client ICE_SERVERS.</div>
-        </div>
-      </div>
-
-      <aside style="width:300px">
-        <div class="panel">
-          <div class="small">Participants</div>
-          <div id="participants" class="participants"></div>
-          <hr style="border:none;height:8px;opacity:0" />
-          <div class="small">Pending (host only)</div>
-          <div id="pendingList" class="pending"></div>
-        </div>
-      </aside>
-    </div>
-
-    <!-- waiting overlay -->
-    <div id="waiting" class="panel hidden" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);min-width:300px;text-align:center;z-index:40">
-      <div class="small">Waiting for host approval...</div>
-      <div style="margin-top:10px"><button id="leavePending">Leave</button></div>
-    </div>
+  <div class="row">
+    <label>Room ID: <input id="roomId" placeholder="room-1"></label>
+    <label>Your ID: <input id="clientId" placeholder="random-id"></label>
+    <button id="joinBtn">Join Room</button>
+    <button id="leaveBtn" disabled>Leave</button>
   </div>
 
+  <div class="row">
+    <label>Mic:
+      <select id="audioIn"></select>
+    </label>
+    <label>Output:
+      <select id="audioOut"></select>
+    </label>
+    <label>
+      <input id="muteLocal" type="checkbox"> Mute mic
+    </label>
+  </div>
+
+  <div class="controls">
+    <button id="callBtn" disabled>Start Call</button>
+    <button id="hangBtn" disabled>Hangup</button>
+  </div>
+
+  <div class="status" id="status">Not connected</div>
+
+  <h3>Local</h3>
+  <audio id="local" autoplay muted></audio>
+
+  <h3>Remote</h3>
+  <audio id="remote" autoplay></audio>
+
 <script>
-/* Client: chat + approval + WebRTC audio
-   - Edit ICE_SERVERS below to add TURN credentials for reliable worldwide connectivity.
-*/
-
-/* ---------- Configuration ----------
- - Add TURN server here if you have one (recommended).
- - Example TURN entry:
-   { urls: "turn:turn.example.com:3478", username: "user", credential: "pass" }
------------------------------------- */
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" }
-  // add TURN entries here
-];
-
-/* ---------- UI elements ---------- */
-const nameEl = document.getElementById('name');
-const roomEl = document.getElementById('room');
-const connectBtn = document.getElementById('connect');
-const disconnectBtn = document.getElementById('disconnect');
-const chatEl = document.getElementById('chat');
-const participantsEl = document.getElementById('participants');
-const pendingEl = document.getElementById('pendingList');
-const msgEl = document.getElementById('message');
-const sendBtn = document.getElementById('send');
-const approvalToggle = document.getElementById('approvalToggle');
-const waitingBox = document.getElementById('waiting');
-const leavePending = document.getElementById('leavePending');
-
-const micSelect = document.getElementById('micSelect');
-const startAudioBtn = document.getElementById('startAudio');
-const muteBtn = document.getElementById('muteBtn');
-
-/* ---------- State ---------- */
+const serverBase = location.origin; // works when served from same domain
 let ws = null;
-let myId = null;
-let hostId = null;
+let pc = null;
 let localStream = null;
-const pcs = {};      // peerId -> RTCPeerConnection
-const audioEls = {}; // peerId -> audio element
-let isMuted = false;
+let roomId = null;
+let clientId = null;
+const audioInSelect = document.getElementById('audioIn');
+const audioOutSelect = document.getElementById('audioOut');
+const localAudio = document.getElementById('local');
+const remoteAudio = document.getElementById('remote');
+const joinBtn = document.getElementById('joinBtn');
+const leaveBtn = document.getElementById('leaveBtn');
+const callBtn = document.getElementById('callBtn');
+const hangBtn = document.getElementById('hangBtn');
+const status = document.getElementById('status');
+const muteLocal = document.getElementById('muteLocal');
 
-/* ---------- helpers ---------- */
-function esc(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c]||c)); }
-function addChat(html){ const d=document.createElement('div'); d.className='msg'; d.innerHTML=html; chatEl.appendChild(d); chatEl.scrollTop=chatEl.scrollHeight; }
-function renderParticipants(list){ participantsEl.innerHTML=''; (list||[]).forEach(p=>{ const d=document.createElement('div'); d.className='meta'; d.innerHTML=`<strong>${esc(p.name)}</strong><div class="meta">${esc(p.id)}</div>`; participantsEl.appendChild(d); }); }
-function renderPending(list){ pendingEl.innerHTML=''; (list||[]).forEach(p=>{ const row=document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.marginBottom='6px'; row.innerHTML=`<div>${esc(p.name)}<div class="meta">${esc(p.id)}</div></div>`; const btns=document.createElement('div'); const a=document.createElement('button'); a.textContent='Accept'; a.onclick=()=>{ sendAction('accept', p.id); row.remove(); }; const r=document.createElement('button'); r.textContent='Reject'; r.onclick=()=>{ if(confirm('Reject '+p.name+'?')){ sendAction('reject', p.id); row.remove(); } }; btns.appendChild(a); btns.appendChild(r); row.appendChild(btns); pendingEl.appendChild(row); }); }
+function log(s){ console.log(s); status.innerText = s; }
 
-/* ---------- signalling helpers ---------- */
-function sendAction(action, target, extra={}){ if(!ws) return; ws.send(JSON.stringify(Object.assign({ type:'action', action, target }, extra))); }
-function sendSignalling(payload){ if(!ws || ws.readyState !== WebSocket.OPEN) return; ws.send(JSON.stringify(Object.assign({ from: myId }, payload))); }
-
-/* ---------- WebRTC audio logic ---------- */
-async function enumerateMics() {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const mics = devices.filter(d => d.kind === 'audioinput');
-    micSelect.innerHTML = '';
-    mics.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m.deviceId;
-      opt.textContent = m.label || m.deviceId;
-      micSelect.appendChild(opt);
-    });
-  } catch (e) {
-    console.warn('enumerateDevices failed', e);
-  }
+// device enumeration
+async function populateDevices() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  audioInSelect.innerHTML = '';
+  audioOutSelect.innerHTML = '';
+  devices.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.text = (d.label || d.kind + ' ' + d.deviceId);
+    if (d.kind === 'audioinput') audioInSelect.appendChild(opt);
+    if (d.kind === 'audiooutput') audioOutSelect.appendChild(opt);
+  });
 }
+populateDevices();
+navigator.mediaDevices.ondevicechange = populateDevices;
 
-async function ensureLocalStream(deviceId = undefined) {
-  if (localStream) {
-    // if device changed, replace track
-    if (deviceId) {
-      const newStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
-      const newTrack = newStream.getAudioTracks()[0];
-      if (localStream && localStream.getAudioTracks()[0]) {
-        // replaceTrack for each sender
-        for (const peerId of Object.keys(pcs)) {
-          const pc = pcs[peerId];
-          const senders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
-          if (senders[0]) {
-            try { senders[0].replaceTrack(newTrack); } catch(e){ console.warn('replaceTrack failed', e); }
-          }
-        }
+// join/leave room (open websocket)
+joinBtn.onclick = async ()=>{
+  roomId = document.getElementById('roomId').value || 'room-1';
+  clientId = document.getElementById('clientId').value || Math.random().toString(36).slice(2,9);
+  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${encodeURIComponent(roomId)}/${encodeURIComponent(clientId)}`;
+  ws = new WebSocket(wsUrl);
+  ws.onopen = ()=> {
+    log('WebSocket connected to room ' + roomId);
+    joinBtn.disabled = true;
+    leaveBtn.disabled = false;
+    callBtn.disabled = false;
+  };
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    const from = msg.from;
+    const type = msg.type;
+    const payload = msg.payload || {};
+    // handle signaling messages
+    if (type === 'offer') {
+      await ensurePeerConnection();
+      await pc.setRemoteDescription(new RTCSessionDescription(payload));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ to: from, type: 'answer', payload: pc.localDescription }));
+      log('Received offer, sent answer');
+    } else if (type === 'answer') {
+      await pc.setRemoteDescription(new RTCSessionDescription(payload));
+      log('Received answer');
+    } else if (type === 'ice') {
+      try {
+        await pc.addIceCandidate(payload);
+      } catch (e) {
+        console.warn('ICE add error', e);
       }
-      // stop previous tracks and set new stream
-      localStream.getTracks().forEach(t => t.stop());
-      localStream = newStream;
-    }
-    return localStream;
-  }
-
-  // either no stream -> create
-  try {
-    const constraints = deviceId ? { audio: { deviceId: { exact: deviceId } } } : { audio: true };
-    localStream = await navigator.mediaDevices.getUserMedia(constraints);
-    addChat('<div class="meta">Local microphone opened</div>');
-    return localStream;
-  } catch (err) {
-    addChat('<div class="meta" style="color:crimson">Microphone access denied or not available</div>');
-    throw err;
-  }
-}
-
-function makeAudioElement(peerId) {
-  if (audioEls[peerId]) return audioEls[peerId];
-  const a = document.createElement('audio');
-  a.autoplay = true;
-  a.id = 'audio-' + peerId;
-  a.style.display = 'none'; // invisible but audible
-  document.body.appendChild(a);
-  audioEls[peerId] = a;
-  return a;
-}
-
-function createPeerConnection(peerId) {
-  if (pcs[peerId]) return pcs[peerId];
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-
-  // add local audio tracks if available
-  if (localStream) {
-    localStream.getTracks().forEach(track => {
-      try { pc.addTrack(track, localStream); } catch(e) { console.warn(e); }
-    });
-  }
-
-  pc.onicecandidate = ev => {
-    if (ev.candidate) sendSignalling({ type: 'ice-candidate', to: peerId, candidate: ev.candidate });
-  };
-
-  pc.ontrack = ev => {
-    const el = makeAudioElement(peerId);
-    el.srcObject = ev.streams[0];
-    el.play().catch(()=>{/* may require user gesture */});
-    addChat(`<div class="meta">Playing audio from ${peerId}</div>`);
-  };
-
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-      try { pc.close(); } catch(e){}
-      delete pcs[peerId];
-      const a = audioEls[peerId]; if (a) { try { a.remove(); } catch(e){} delete audioEls[peerId]; }
+    } else if (type === 'peer-joined') {
+      // optionally start call to new peer
+      log('Peer joined: ' + payload.client_id);
+    } else if (type === 'peer-left') {
+      log('Peer left: ' + payload.client_id);
+    } else if (type === 'error') {
+      console.warn('server error', payload.message);
     }
   };
+  ws.onclose = ()=> {
+    log('WebSocket closed');
+    joinBtn.disabled = false;
+    leaveBtn.disabled = true;
+    callBtn.disabled = true;
+  };
+};
 
-  pcs[peerId] = pc;
-  return pc;
-}
+// leave room
+leaveBtn.onclick = async ()=>{
+  if (ws) ws.close();
+  ws = null;
+  joinBtn.disabled = false;
+  leaveBtn.disabled = true;
+  callBtn.disabled = true;
+  hangup();
+};
 
-async function createOffer(peerId) {
-  try {
-    await ensureLocalStream(micSelect.value || undefined);
-  } catch(e) {
-    console.warn('no local stream, cannot create offer');
-    return;
-  }
-  const pc = createPeerConnection(peerId);
+// start local capture + create offer to all peers (simple mesh: broadcast offer)
+callBtn.onclick = async ()=>{
+  await ensureLocalMedia();
+  await ensurePeerConnection();
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  sendSignalling({ type: 'offer', to: peerId, sdp: offer.sdp, sdpType: offer.type });
-}
+  // broadcast offer to room (server will forward "offer" to others)
+  ws.send(JSON.stringify({ type: 'offer', payload: pc.localDescription }));
+  log('Offer created and sent');
+  callBtn.disabled = true;
+  hangBtn.disabled = false;
+};
 
-async function handleOffer(msg) {
-  const from = msg.from;
-  try {
-    await ensureLocalStream(micSelect.value || undefined);
-  } catch(e) {
-    console.warn('cannot open mic to answer');
-    return;
-  }
-  const pc = createPeerConnection(from);
-  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  sendSignalling({ type: 'answer', to: from, sdp: answer.sdp, sdpType: answer.type });
-}
+// hangup
+hangBtn.onclick = ()=>{
+  hangup();
+  log('Call ended');
+};
 
-async function handleAnswer(msg) {
-  const from = msg.from;
-  const pc = pcs[from];
-  if (!pc) return;
-  await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
-}
-
-async function handleRemoteICE(msg) {
-  const from = msg.from;
-  if (!pcs[from]) createPeerConnection(from); // create placeholder pc
-  try {
-    await pcs[from].addIceCandidate(msg.candidate);
-  } catch (e) {
-    console.warn('ICE add error', e);
+async function ensureLocalMedia(){
+  if (localStream) return;
+  const constraints = {
+    audio: { deviceId: audioInSelect.value ? { exact: audioInSelect.value } : undefined },
+    video: false
+  };
+  localStream = await navigator.mediaDevices.getUserMedia(constraints);
+  localAudio.srcObject = localStream;
+  if (muteLocal.checked) {
+    localStream.getAudioTracks().forEach(t=>t.enabled=false);
   }
 }
 
-/* ---------- Integrate with your signalling messages ---------- */
-function handleServerMessage(msg) {
-  // standard chat/approval handlers (existing)
-  switch (msg.type) {
-    case 'waiting':
-      waitingBox.classList.remove('hidden');
-      addChat('<div class="meta">Waiting for host approval...</div>');
-      sendBtn.disabled = true;
-      startAudioBtn.disabled = true;
-      break;
-    case 'join-request':
-      addChat(`<div class="meta">Join request: ${esc(msg.participant.name)}</div>`);
-      break;
-    case 'welcome':
-      waitingBox.classList.add('hidden');
-      myId = msg.id;
-      hostId = msg.host_id;
-      addChat(`<div class="meta">Welcome — id: ${esc(msg.id)}</div>`);
-      renderParticipants(msg.participants || []);
-      sendBtn.disabled = false;
-      startAudioBtn.disabled = false;
-      if (msg.room_meta) approvalToggle.checked = !!msg.room_meta.require_approval;
-      if (msg.pending) renderPending(msg.pending);
-      // create offers to all listed participants
-      (msg.participants || []).forEach(p => {
-        if (p.id !== myId) setTimeout(()=>createOffer(p.id).catch(e=>console.warn(e)), 150);
-      });
-      break;
-    case 'participants':
-      renderParticipants(msg.participants || []);
-      break;
-    case 'pending':
-      renderPending(msg.pending || []);
-      break;
-    case 'participant-joined':
-      addChat(`<div class="meta">${esc(msg.name)} joined</div>`);
-      // start sending offers to new approved participant
-      if (msg.id && msg.id !== myId) setTimeout(()=>createOffer(msg.id).catch(e=>console.warn(e)), 200);
-      break;
-    case 'participant-left':
-      addChat(`<div class="meta">${esc(msg.name)} left</div>`);
-      // close pc if exists
-      if (pcs[msg.id]) try { pcs[msg.id].close(); } catch(e){} delete pcs[msg.id];
-      if (audioEls[msg.id]) try { audioEls[msg.id].remove(); } catch(e){} delete audioEls[msg.id];
-      break;
-    case 'chat':
-      addChat(`<strong>${esc(msg.name)}</strong> ${esc(msg.text)}`);
-      break;
-    case 'room-meta':
-      if (msg.meta) approvalToggle.checked = !!msg.meta.require_approval;
-      break;
-    case 'command':
-      if (msg.cmd === 'you-are-rejected') {
-        addChat('<div class="meta" style="color:crimson">You were rejected by host</div>');
-        if (ws) ws.close();
-        cleanup();
-      } else if (msg.cmd === 'force-mute') {
-        // host asked to force-mute this client
-        if (localStream) {
-          localStream.getAudioTracks().forEach(t => t.enabled = false);
-          isMuted = true; muteBtn.textContent = 'Unmute';
-        }
-        addChat(`<div class="meta">You were asked to mute by host</div>`);
-      }
-      break;
-    case 'error':
-      addChat(`<div class="meta" style="color:crimson">Error: ${esc(msg.message)}</div>`);
-      break;
-    // WebRTC signalling messages
-    case 'offer':
-      handleOffer(msg).catch(e=>console.warn(e));
-      break;
-    case 'answer':
-      handleAnswer(msg).catch(e=>console.warn(e));
-      break;
-    case 'ice-candidate':
-      handleRemoteICE(msg).catch(e=>console.warn(e));
-      break;
-    default:
-      console.log('unhandled msg', msg);
-  }
-}
+async function ensurePeerConnection(){
+  if (pc) return;
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  });
 
-/* ---------- UI wiring ---------- */
-connectBtn.onclick = () => {
-  if (ws) return;
-  const name = (nameEl.value || 'Guest').trim();
-  const room = (roomEl.value || 'main').trim();
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${proto}://${location.host}/ws/${encodeURIComponent(room)}`;
-  ws = new WebSocket(url);
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'join', name }));
-    addChat('<div class="meta">Connecting…</div>');
-    connectBtn.disabled = true;
-    disconnectBtn.disabled = false;
+  // send ICE to signaling server (we attach no "to" so server can broadcast or you can set to a specific peer)
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) return;
+    ws.send(JSON.stringify({ type: 'ice', payload: e.candidate }));
   };
 
-  ws.onmessage = (evt) => {
-    try {
-      const msg = JSON.parse(evt.data);
-      handleServerMessage(msg);
-    } catch (e) { console.error(e); }
+  pc.ontrack = (e) => {
+    // remote audio stream
+    remoteAudio.srcObject = e.streams[0];
   };
 
-  ws.onclose = () => {
-    addChat('<div class="meta">Disconnected</div>');
-    cleanup();
-  };
+  // attach local tracks
+  await ensureLocalMedia();
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+}
 
-  ws.onerror = (e) => {
-    console.error('ws error', e);
-  };
-
-  // enumerate mics for device selection
-  enumerateMics();
-};
-
-disconnectBtn.onclick = () => {
-  if (ws) ws.close();
-  cleanup();
-};
-
-sendBtn.onclick = () => {
-  const t = (msgEl.value || '').trim();
-  if (!t || !ws) return;
-  ws.send(JSON.stringify({ type: 'chat', text: t }));
-  addChat(`<strong>[me]</strong> ${esc(t)}`);
-  msgEl.value = '';
-};
-
-approvalToggle.onchange = () => {
-  if (!ws) { approvalToggle.checked = !approvalToggle.checked; alert('Connect as host to change'); return; }
-  sendAction('set-approval', null, { value: approvalToggle.checked });
-};
-
-leavePending.onclick = () => {
-  if (ws) ws.close();
-  cleanup();
-};
-
-startAudioBtn.onclick = async () => {
-  try {
-    await ensureLocalStream(micSelect.value || undefined);
-    // add local tracks to existing peer connections
-    for (const peerId of Object.keys(pcs)) {
-      const pc = pcs[peerId];
-      const senders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
-      const localTrack = localStream.getAudioTracks()[0];
-      if (senders.length > 0) {
-        try { await senders[0].replaceTrack(localTrack); } catch(e){ console.warn(e); }
-      } else {
-        try { pc.addTrack(localTrack, localStream); } catch(e) { console.warn(e); }
-      }
-    }
-    addChat('<div class="meta">Local audio started</div>');
-    startAudioBtn.disabled = true;
-    muteBtn.disabled = false;
-  } catch (e) {
-    console.warn(e);
-    alert('Microphone error: ' + (e && e.message));
+// hangup/cleanup
+function hangup(){
+  if (pc) {
+    pc.getSenders().forEach(s => { try { s.track && s.track.stop(); } catch(e){} });
+    pc.close();
+    pc = null;
   }
-};
-
-muteBtn.onclick = () => {
-  if (!localStream) return;
-  isMuted = !isMuted;
-  localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
-  muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
-};
-
-/* when user changes mic selection, replace track */
-micSelect.onchange = async () => {
-  if (!localStream) return;
-  try {
-    await ensureLocalStream(micSelect.value);
-    addChat('<div class="meta">Switched microphone</div>');
-  } catch (e) {
-    console.warn(e);
-  }
-};
-
-/* cleanup all state */
-function cleanup() {
-  // close pcs
-  Object.values(pcs).forEach(pc => { try{ pc.close(); } catch(e){} });
-  for (const k in pcs) delete pcs[k];
-  // stop local stream
   if (localStream) {
-    localStream.getTracks().forEach(t => t.stop());
+    localStream.getTracks().forEach(t=>t.stop());
     localStream = null;
+    localAudio.srcObject = null;
   }
-  // remove audio elements
-  Object.values(audioEls).forEach(a => { try{ a.remove(); } catch(e){} });
-  for (const k in audioEls) delete audioEls[k];
-  ws = null;
-  myId = null;
-  hostId = null;
-  connectBtn.disabled = false;
-  disconnectBtn.disabled = true;
-  sendBtn.disabled = true;
-  startAudioBtn.disabled = true;
-  muteBtn.disabled = true;
-  waitingBox.classList.add('hidden');
-  participantsEl.innerHTML = '';
-  pendingEl.innerHTML = '';
+  hangBtn.disabled = true;
+  callBtn.disabled = false;
 }
-
-/* keyboard send */
-msgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBtn.click(); });
-
-/* on load enumerate devices if permission already granted */
-navigator.permissions && navigator.permissions.query({name:'microphone'}).then(() => enumerateMics()).catch(()=>{ /* ignore */ });
-
 </script>
 </body>
 </html>
