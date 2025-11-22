@@ -1,16 +1,27 @@
 # server.py
 import json
 import asyncio
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 
 app = FastAPI()
-# serve the static frontend from ./static
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# rooms: room_id -> set of websockets
-rooms = {}
+# serve static directory
+static_dir = Path(__file__).with_name("static")
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+# serve index at root so / loads the UI
+INDEX_PATH = static_dir / "index.html"
+
+@app.get("/")
+async def root():
+    # return the static/index.html at root
+    return FileResponse(str(INDEX_PATH))
+
+# rooms: room_id -> dict client_id -> websocket
+rooms: dict[str, dict[str, WebSocket]] = {}
 
 @app.websocket("/ws/{room_id}/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str):
@@ -20,16 +31,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
     rooms[room_id][client_id] = websocket
 
     try:
-        # Inform existing peers about newcomer (optional)
         await notify_peers_join(room_id, client_id)
 
         while True:
             data = await websocket.receive_text()
-            # Expect JSON: { "to": "<client_id>", "type": "...", "payload": {...} }
             msg = json.loads(data)
             target = msg.get("to")
             if target:
-                # forward to target if present
                 target_ws = rooms.get(room_id, {}).get(target)
                 if target_ws:
                     await target_ws.send_text(json.dumps({
@@ -38,21 +46,19 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
                         "payload": msg.get("payload")
                     }))
                 else:
-                    # optional: let caller know peer not found
                     await websocket.send_text(json.dumps({
                         "from": "server",
                         "type": "error",
                         "payload": {"message": "target-not-found", "target": target}
                     }))
             else:
-                # broadcast to others if no explicit target (useful for simple discovery)
                 await broadcast_in_room(room_id, client_id, msg)
     except WebSocketDisconnect:
-        # cleanup
+        await remove_client_from_room(room_id, client_id)
+    except Exception:
         await remove_client_from_room(room_id, client_id)
 
 async def notify_peers_join(room_id: str, new_client_id: str):
-    # notify other peers about new participant
     for cid, ws in list(rooms.get(room_id, {}).items()):
         if cid == new_client_id:
             continue
@@ -83,7 +89,6 @@ async def remove_client_from_room(room_id: str, client_id: str):
     if not room:
         return
     room.pop(client_id, None)
-    # notify remaining
     for cid, ws in list(room.items()):
         try:
             await ws.send_text(json.dumps({
